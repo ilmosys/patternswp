@@ -1,4 +1,8 @@
 <?php
+// Exit if accessed directly
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class PatternsWP_LicenseSection {
 	private $patternswp_license_key_option;
@@ -102,15 +106,17 @@ class PatternsWP_LicenseSection {
 				$patterns_tkey    = 'patterns_data';
 				delete_transient( $patterns_tkey );
 			}else{
-				wp_redirect( add_query_arg( array( 
+				$redirect_url = add_query_arg( array( 
 					'page'    => 'patternswp-license_section', 
 					'pt_msg'  => urlencode( 'License activation failed: License Key cannot be empty. Please enter a valid license key.' ), 
 					'status'  => 'error' 
-				), admin_url( 'admin.php' ) ) );
+				), admin_url( 'admin.php' ) );
+				wp_safe_redirect( $redirect_url );
 				exit;
 			}
 
-			wp_redirect( add_query_arg( 'updated', 'true', wp_get_referer() ) );
+			$redirect_url = add_query_arg( 'updated', 'true', wp_get_referer() );
+			wp_safe_redirect( $redirect_url );
 			exit;
 		}
 	}
@@ -124,21 +130,23 @@ class PatternsWP_LicenseSection {
 	public function handle_license_activation( $old_value, $new_value ) {
 		if ( isset( $new_value['patternswp_pro_license_key'] ) && ! empty( $new_value['patternswp_pro_license_key'] ) ) {
 			if ( $old_value['patternswp_pro_license_key'] === $new_value['patternswp_pro_license_key'] ) {
-				wp_redirect( add_query_arg( array( 
+				$redirect_url = add_query_arg( array( 
 					'page'    => 'patternswp-license_section', 
 					'pt_msg'  => urlencode( 'License Key is already activated.' ), 
 					'status'  => 'info' 
-				), admin_url( 'admin.php' ) ) );
+				), admin_url( 'admin.php' ) );
+				wp_safe_redirect( $redirect_url );
 				exit;
 			} else {
 				$this->activate_license( $new_value['patternswp_pro_license_key'] );
 			}
 		} else {
-			wp_redirect( add_query_arg( array( 
+			$redirect_url = add_query_arg( array( 
 				'page'    => 'patternswp-license_section', 
 				'pt_msg'  => urlencode( 'License activation failed: License Key cannot be empty. Please enter a valid license key.' ), 
 				'status'  => 'error' 
-			), admin_url( 'admin.php' ) ) );
+			), admin_url( 'admin.php' ) );
+			wp_safe_redirect( $redirect_url );
 			exit;
 		}
 	}
@@ -161,11 +169,12 @@ class PatternsWP_LicenseSection {
 				$response->error = 'License activation failed: Please enter a valid license key.';
 			}
 
-			wp_redirect( add_query_arg( array( 
+			$redirect_url = add_query_arg( array( 
 				'page'    => 'patternswp-license_section', 
 				'pt_msg' => urlencode( $response->error ), 
 				'status'  => 'error' 
-			), admin_url( 'admin.php' ) ) );
+			), admin_url( 'admin.php' ) );
+			wp_safe_redirect( $redirect_url );
 			exit;
 		}
 
@@ -180,11 +189,12 @@ class PatternsWP_LicenseSection {
 
 			do_action( 'patternswp_load_patterns_by_ra' );
 
-			wp_redirect( add_query_arg( array( 
+			$redirect_url = add_query_arg( array( 
 				'page'    => 'patternswp-license_section', 
 				'pt_msg'  => urlencode( 'License activated successfully.' ), 
 				'status'  => 'success' 
-			), admin_url( 'admin.php' ) ) );
+			), admin_url( 'admin.php' ) );
+			wp_safe_redirect( $redirect_url );
 			exit;
 
 		}

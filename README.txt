@@ -1,10 +1,10 @@
 === PatternsWP - Gutenberg Block Patterns & Page Templates Library ===
-Contributors: patternswpteam, mahdiali
+Contributors: patternswpteam, ilmosys, mahdiali
 Tags: patterns, templates, gutenberg, blocks, library, block patterns, layouts, block, pattern, template, layout, block editor, page builder, gutenberg patterns, wordpress patterns
 Requires at least: 6.0
-Tested up to: 6.8
+Tested up to: 6.9
 Requires PHP: 7.0
-Stable tag: 1.0.7
+Stable tag: 1.0.8
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -39,6 +39,16 @@ PatternsWP is a collection of pre-designed gutenberg block patterns that can be 
 * Blog Patterns
 * Utility Patterns
 * Full Page Templates
+
+=== Features: Pattern Visibility Control ===
+
+Customize which patterns appear in your editor with our powerful visibility controls:
+
+* **Hide Theme Patterns** - Prevent patterns registered by your active theme from cluttering your pattern library
+* **Hide Uncategorized Patterns** - Keep your pattern list clean by hiding patterns without categories
+* **Hide Core Patterns** - Remove all default WordPress core patterns from the pattern selector
+
+Access these settings in: WordPress Admin → PatternsWP → Settings → Pattern Visibility
 
 = Privacy =
 At PatternsWP, we are committed to protecting the privacy of our users. PatternsWP accesses block patterns and categories from our servers through a custom API. By activating the PatternsWP plugin, you agree to our [privacy policy](https://thepatternswp.com/privacy-policy/) and [terms of service](https://thepatternswp.com/terms-of-service/).
@@ -82,6 +92,7 @@ Yes! PatternsWP works with any WordPress theme that supports the block editor (G
 
 = Is PatternsWP free to use? =  
 Yes, PatternsWP is free to use. You can access a wide range of patterns at no cost. However, our [Premium Block Patterns & Full Page Templates](https://thepatternswp.com/pricing/) unlock exclusive layouts and help you build websites faster.
+
 = How can I access Pro patterns? =  
 You can unlock Pro patterns by upgrading to **PatternsWP Pro**. Visit our [pricing page](https://thepatternswp.com/pricing/) to explore the benefits.  
 
@@ -98,11 +109,18 @@ We’d love to hear from you! If you have suggestions, feedback, or have found a
 3. Search the Library, Select Patterns With One Click, and Use Them on Your WordPress Site
 
 == Changelog ==
+= 1.0.8 - 31 Jan, 2025 =
+* Updated: Tested up to WordPress 6.9
+* Added: Pattern visibility controls (theme, core, uncategorized)
+* Added: Pattern caching for better performance
+* Improved: Pattern detection and filtering
+* Enhanced: Security with nonce verification
+* Fixed: Various bug fixes and improvements
+
 = 1.0.7 - 25 Apr, 2025 =
 * Updated: Tested up to WordPress 6.8.
 * Added: A new button on the welcome page for an easier start.
 * Improved: Optimized performance
-
 
 = 1.0.6 - 06 Apr, 2025 =
 * Fixed: Security issues with input handling and database queries
