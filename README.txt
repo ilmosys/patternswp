@@ -117,7 +117,7 @@ We’d love to hear from you! If you have suggestions, feedback, or have found a
 * Enhanced: Security with nonce verification
 * Fixed: Various bug fixes and improvements
 
-= 1.0.7 - 25 Apr, 2025 =
+= 1.0.7 - 25 Apr, 2026 =
 * Updated: Tested up to WordPress 6.8.
 * Added: A new button on the welcome page for an easier start.
 * Improved: Optimized performance
