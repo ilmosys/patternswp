@@ -243,9 +243,9 @@ class PatternsWP_API_Section {
         // Return the patterns if not empty.
         if (!empty($patterns)) {
             // Apply pattern visibility filter
-            error_log('[PatternsWP API] Applying filter to ' . count($patterns) . ' patterns from API');
+            // error_log('[PatternsWP API] Applying filter to ' . count($patterns) . ' patterns from API');
             $patterns = apply_filters('patternswp_patterns', $patterns);
-            error_log('[PatternsWP API] Filter applied, now have ' . count($patterns) . ' patterns');
+            // error_log('[PatternsWP API] Filter applied, now have ' . count($patterns) . ' patterns');
             return $patterns;
         } else {
             // error_log('Received empty response for patterns.');
@@ -275,9 +275,9 @@ class PatternsWP_API_Section {
      */
     private function register_patterns_and_categories( $patterns ) {
         // Apply pattern visibility filter before registering
-        error_log('[PatternsWP API] Register patterns - applying filter to ' . count($patterns) . ' patterns');
+        // error_log('[PatternsWP API] Register patterns - applying filter to ' . count($patterns) . ' patterns');
         $patterns = apply_filters('patternswp_patterns', $patterns);
-        error_log('[PatternsWP API] Register patterns - filter applied, now have ' . count($patterns) . ' patterns');
+        // error_log('[PatternsWP API] Register patterns - filter applied, now have ' . count($patterns) . ' patterns');
         
         $registered_categories = array();
     

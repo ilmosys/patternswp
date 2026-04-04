@@ -4,7 +4,7 @@ Tags: patterns, templates, gutenberg, blocks, library, block patterns, layouts, 
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 7.0
-Stable tag: 1.0.8
+Stable tag: 1.0.9
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -12,7 +12,7 @@ Explore a library of pre-designed Gutenberg block patterns and page templates th
 
 == Description ==
 
-= A library of WordPress block patterns and full-page templates =
+= A library of WordPress block patterns and full-page website templates =
 
 <a href="https://thepatternswp.com/?utm_source=wprepo&utm_medium=link&utm_campaign=plugin" title="PatternsWP - WordPress Block Patterns Library Plugin">PatternsWP</a> is an innovative WordPress plugin that enhances your website design process with its intuitive Block Patterns Library.
 
@@ -109,7 +109,10 @@ We’d love to hear from you! If you have suggestions, feedback, or have found a
 3. Search the Library, Select Patterns With One Click, and Use Them on Your WordPress Site
 
 == Changelog ==
-= 1.0.8 - 31 Jan, 2025 =
+= 1.0.9 - 04 Apr, 2026 =
+* Fixed: Restricted debug output
+
+= 1.0.8 - 31 Jan, 2026 =
 * Updated: Tested up to WordPress 6.9
 * Added: Pattern visibility controls (theme, core, uncategorized)
 * Added: Pattern caching for better performance
@@ -117,7 +120,7 @@ We’d love to hear from you! If you have suggestions, feedback, or have found a
 * Enhanced: Security with nonce verification
 * Fixed: Various bug fixes and improvements
 
-= 1.0.7 - 25 Apr, 2026 =
+= 1.0.7 - 25 Apr, 2025 =
 * Updated: Tested up to WordPress 6.8.
 * Added: A new button on the welcome page for an easier start.
 * Improved: Optimized performance

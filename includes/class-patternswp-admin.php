@@ -37,7 +37,7 @@ class PatternsWP_Admin {
         add_action('init', array($this, 'maybe_deregister_uncategorized_patterns'), 10000);
         add_action('init', array($this, 'maybe_deregister_core_patterns'), 10001);
         
-        error_log('[PatternsWP] Constructor - All pattern deregistration hooks registered');
+        // error_log('[PatternsWP] Constructor - All pattern deregistration hooks registered');
         
         // Apply filters for different pattern sources
         add_filter('patternswp_patterns', array($this, 'filter_patterns_by_visibility'), 20);
@@ -71,7 +71,7 @@ class PatternsWP_Admin {
         $hide_uncategorized = get_option('patternswp_hide_uncategorized_patterns', false);
         $hide_core = get_option('patternswp_hide_core_patterns', false);
         
-        error_log('[PatternsWP] Settings Check - Theme: ' . ($hide_theme ? 'true' : 'false') . ', Uncategorized: ' . ($hide_uncategorized ? 'true' : 'false') . ', Core: ' . ($hide_core ? 'true' : 'false'));
+        // error_log('[PatternsWP] Settings Check - Theme: ' . ($hide_theme ? 'true' : 'false') . ', Uncategorized: ' . ($hide_uncategorized ? 'true' : 'false') . ', Core: ' . ($hide_core ? 'true' : 'false'));
     }
 
     /**
@@ -467,10 +467,10 @@ class PatternsWP_Admin {
      */
     public function maybe_deregister_theme_patterns() {
         $hide_theme_patterns = get_option('patternswp_hide_theme_patterns', false);
-        error_log('[PatternsWP] maybe_deregister_theme_patterns called - hide_theme_patterns: ' . ($hide_theme_patterns ? 'true' : 'false'));
+        // error_log('[PatternsWP] maybe_deregister_theme_patterns called - hide_theme_patterns: ' . ($hide_theme_patterns ? 'true' : 'false'));
         
         if (!$hide_theme_patterns) {
-            error_log('[PatternsWP] Theme pattern hiding is disabled');
+            // error_log('[PatternsWP] Theme pattern hiding is disabled');
             return;
         }
         
@@ -489,13 +489,13 @@ class PatternsWP_Admin {
         }
         $paths_to_search = array_unique($paths_to_search);
         
-        error_log('[PatternsWP] Theme paths to search: ' . implode(', ', $paths_to_search));
+        // error_log('[PatternsWP] Theme paths to search: ' . implode(', ', $paths_to_search));
         
         // Get all registered patterns.
         $patterns = \WP_Block_Patterns_Registry::get_instance();
         $all_patterns = $patterns->get_all_registered();
         
-        error_log('[PatternsWP] Total registered patterns: ' . count($all_patterns));
+        // error_log('[PatternsWP] Total registered patterns: ' . count($all_patterns));
         
         // Loop through all patterns and deregister any that are from the active or child theme.
         foreach ($all_patterns as $index => $pattern) {
@@ -508,7 +508,7 @@ class PatternsWP_Admin {
             foreach ($paths_to_search as $path) {
                 if (false !== strpos($file_path, 'themes/' . $path)) {
                     unregister_block_pattern($pattern['name']);
-                    error_log('[PatternsWP] Deregistered theme pattern: ' . $pattern['name'] . ' from path: ' . $file_path);
+                    // error_log('[PatternsWP] Deregistered theme pattern: ' . $pattern['name'] . ' from path: ' . $file_path);
                 }
             }
         }
@@ -519,11 +519,11 @@ class PatternsWP_Admin {
      */
     public function maybe_deregister_uncategorized_patterns() {
         $hide_uncategorized_enabled = get_option('patternswp_hide_uncategorized_patterns', false);
-        error_log('[PatternsWP] maybe_deregister_uncategorized_patterns called - hide_uncategorized: ' . ($hide_uncategorized_enabled ? 'true' : 'false'));
+        // error_log('[PatternsWP] maybe_deregister_uncategorized_patterns called - hide_uncategorized: ' . ($hide_uncategorized_enabled ? 'true' : 'false'));
         
         // Exit early if not enabled.
         if (!$hide_uncategorized_enabled) {
-            error_log('[PatternsWP] Uncategorized pattern hiding is disabled');
+            // error_log('[PatternsWP] Uncategorized pattern hiding is disabled');
             return;
         }
         
@@ -531,13 +531,13 @@ class PatternsWP_Admin {
         $patterns = \WP_Block_Patterns_Registry::get_instance();
         $all_patterns = $patterns->get_all_registered();
         
-        error_log('[PatternsWP] Checking ' . count($all_patterns) . ' patterns for uncategorized ones');
+        // error_log('[PatternsWP] Checking ' . count($all_patterns) . ' patterns for uncategorized ones');
         
         // Loop through all patterns and deregister any that are uncategorized.
         foreach ($all_patterns as $index => $pattern) {
             if (!isset($pattern['categories']) || empty($pattern['categories'])) {
                 unregister_block_pattern($pattern['name']);
-                error_log('[PatternsWP] Deregistered uncategorized pattern: ' . $pattern['name']);
+                // error_log('[PatternsWP] Deregistered uncategorized pattern: ' . $pattern['name']);
             } else {
                 $found = false;
                 $block_categories = $pattern['categories'] ?? array();
@@ -549,7 +549,7 @@ class PatternsWP_Admin {
                 }
                 if (!$found) {
                     unregister_block_pattern($pattern['name']);
-                    error_log('[PatternsWP] Deregistered uncategorized pattern (invalid category): ' . $pattern['name']);
+                    // error_log('[PatternsWP] Deregistered uncategorized pattern (invalid category): ' . $pattern['name']);
                 }
             }
         }
@@ -560,11 +560,11 @@ class PatternsWP_Admin {
      */
     public function maybe_deregister_core_patterns() {
         $hide_core_patterns = get_option('patternswp_hide_core_patterns', false);
-        error_log('[PatternsWP] maybe_deregister_core_patterns called - hide_core_patterns: ' . ($hide_core_patterns ? 'true' : 'false'));
+        // error_log('[PatternsWP] maybe_deregister_core_patterns called - hide_core_patterns: ' . ($hide_core_patterns ? 'true' : 'false'));
         
         // Exit early if not enabled.
         if (!$hide_core_patterns) {
-            error_log('[PatternsWP] Core pattern hiding is disabled');
+            // error_log('[PatternsWP] Core pattern hiding is disabled');
             return;
         }
         
@@ -572,7 +572,7 @@ class PatternsWP_Admin {
         $patterns = \WP_Block_Patterns_Registry::get_instance();
         $all_patterns = $patterns->get_all_registered();
         
-        error_log('[PatternsWP] Checking ' . count($all_patterns) . ' patterns for core ones');
+        // error_log('[PatternsWP] Checking ' . count($all_patterns) . ' patterns for core ones');
         
         // Loop through all patterns and deregister any that are core patterns.
         foreach ($all_patterns as $index => $pattern) {
@@ -604,7 +604,7 @@ class PatternsWP_Admin {
             
             if ($is_core_pattern) {
                 unregister_block_pattern($pattern['name']);
-                error_log('[PatternsWP] Deregistered core pattern: ' . $pattern['name'] . ' (' . $reason . ')');
+                // error_log('[PatternsWP] Deregistered core pattern: ' . $pattern['name'] . ' (' . $reason . ')');
             }
         }
     }
@@ -613,13 +613,13 @@ class PatternsWP_Admin {
      * Filter the block patterns list in the editor
      */
     public function filter_block_patterns_list($patterns) {
-        error_log('[PatternsWP] filter_block_patterns_list called with ' . count($patterns) . ' patterns');
+        // error_log('[PatternsWP] filter_block_patterns_list called with ' . count($patterns) . ' patterns');
         
         $hide_theme_patterns = get_option('patternswp_hide_theme_patterns', false);
         $hide_uncategorized = get_option('patternswp_hide_uncategorized_patterns', false);
         $hide_core_patterns = get_option('patternswp_hide_core_patterns', false);
         
-        error_log('[PatternsWP] Block patterns filter - Theme: ' . ($hide_theme_patterns ? 'true' : 'false') . ', Uncategorized: ' . ($hide_uncategorized ? 'true' : 'false') . ', Core: ' . ($hide_core_patterns ? 'true' : 'false'));
+        // error_log('[PatternsWP] Block patterns filter - Theme: ' . ($hide_theme_patterns ? 'true' : 'false') . ', Uncategorized: ' . ($hide_uncategorized ? 'true' : 'false') . ', Core: ' . ($hide_core_patterns ? 'true' : 'false'));
         
         // If no filters are enabled, return original patterns
         if (!$hide_theme_patterns && !$hide_uncategorized && !$hide_core_patterns) {
@@ -636,12 +636,12 @@ class PatternsWP_Admin {
                 // Check if pattern name starts with theme prefix
                 if (isset($pattern['name']) && strpos($pattern['name'], 'theme-') === 0) {
                     $should_include = false;
-                    error_log('[PatternsWP] Excluding theme pattern by name: ' . $pattern['name']);
+                    // error_log('[PatternsWP] Excluding theme pattern by name: ' . $pattern['name']);
                 }
                 // Check if pattern has theme file path
                 if (isset($pattern['filePath']) && strpos($pattern['filePath'], 'themes/') !== false) {
                     $should_include = false;
-                    error_log('[PatternsWP] Excluding theme pattern by path: ' . $pattern['name']);
+                    // error_log('[PatternsWP] Excluding theme pattern by path: ' . $pattern['name']);
                 }
             }
             
@@ -649,7 +649,7 @@ class PatternsWP_Admin {
             if ($hide_uncategorized && $should_include) {
                 if (!isset($pattern['categories']) || empty($pattern['categories'])) {
                     $should_include = false;
-                    error_log('[PatternsWP] Excluding uncategorized pattern: ' . $pattern['name']);
+                    // error_log('[PatternsWP] Excluding uncategorized pattern: ' . $pattern['name']);
                 }
             }
             
@@ -657,7 +657,7 @@ class PatternsWP_Admin {
             if ($hide_core_patterns && $should_include) {
                 if (isset($pattern['name']) && strpos($pattern['name'], 'core/') === 0) {
                     $should_include = false;
-                    error_log('[PatternsWP] Excluding core pattern: ' . $pattern['name']);
+                    // error_log('[PatternsWP] Excluding core pattern: ' . $pattern['name']);
                 }
             }
             
@@ -666,7 +666,7 @@ class PatternsWP_Admin {
             }
         }
         
-        error_log('[PatternsWP] Filtered from ' . count($patterns) . ' to ' . count($filtered_patterns) . ' patterns');
+        // error_log('[PatternsWP] Filtered from ' . count($patterns) . ' to ' . count($filtered_patterns) . ' patterns');
         
         return $filtered_patterns;
     }
@@ -718,7 +718,7 @@ class PatternsWP_Admin {
         }
         
         if ($should_hide) {
-            error_log('[PatternsWP] Filtering REST response for pattern: ' . ($pattern_data['title'] ?? 'Unknown'));
+            // error_log('[PatternsWP] Filtering REST response for pattern: ' . ($pattern_data['title'] ?? 'Unknown'));
             // Return an error response to hide this pattern
             return new WP_Error(
                 'rest_pattern_hidden',
@@ -931,11 +931,11 @@ class PatternsWP_Admin {
      */
     public function filter_patterns_by_visibility($patterns) {
         // Debug logging
-        error_log('[PatternsWP] Filter applied with ' . count((array)$patterns) . ' patterns');
+        // error_log('[PatternsWP] Filter applied with ' . count((array)$patterns) . ' patterns');
         
         // If no patterns or not an array, return early
         if (empty($patterns) || !is_array($patterns)) {
-            error_log('[PatternsWP] No patterns to filter');
+            // error_log('[PatternsWP] No patterns to filter');
             return $patterns;
         }
 
@@ -944,9 +944,9 @@ class PatternsWP_Admin {
         $hide_uncategorized = get_option('patternswp_hide_uncategorized_patterns', false);
         $hide_core_patterns = get_option('patternswp_hide_core_patterns', false);
         
-        error_log('[PatternsWP] Settings - Hide Theme: ' . ($hide_theme_patterns ? 'true' : 'false') . 
-                 ', Hide Uncategorized: ' . ($hide_uncategorized ? 'true' : 'false') . 
-                 ', Hide Core: ' . ($hide_core_patterns ? 'true' : 'false'));
+        // error_log('[PatternsWP] Settings - Hide Theme: ' . ($hide_theme_patterns ? 'true' : 'false') . 
+        //          ', Hide Uncategorized: ' . ($hide_uncategorized ? 'true' : 'false') . 
+        //          ', Hide Core: ' . ($hide_core_patterns ? 'true' : 'false'));
 
         foreach ($patterns as $pattern) {
             // Skip if pattern is not an array
@@ -957,26 +957,26 @@ class PatternsWP_Admin {
 
             // Skip theme patterns if enabled
             if ($hide_theme_patterns && $this->is_theme_pattern($pattern)) {
-                error_log('[PatternsWP] Skipping theme pattern: ' . ($pattern['title'] ?? 'Unknown'));
+                // error_log('[PatternsWP] Skipping theme pattern: ' . ($pattern['title'] ?? 'Unknown'));
                 continue;
             }
             
             // Skip core patterns if enabled
             if ($hide_core_patterns && $this->is_core_pattern($pattern)) {
-                error_log('[PatternsWP] Skipping core pattern: ' . ($pattern['title'] ?? 'Unknown'));
+                // error_log('[PatternsWP] Skipping core pattern: ' . ($pattern['title'] ?? 'Unknown'));
                 continue;
             }
 
             // Skip uncategorized patterns if enabled
             if ($hide_uncategorized && $this->is_uncategorized_pattern($pattern)) {
-                error_log('[PatternsWP] Skipping uncategorized pattern: ' . ($pattern['title'] ?? 'Unknown'));
+                // error_log('[PatternsWP] Skipping uncategorized pattern: ' . ($pattern['title'] ?? 'Unknown'));
                 continue;
             }
 
             $filtered_patterns[] = $pattern;
         }
 
-        error_log('[PatternsWP] Filtered to ' . count($filtered_patterns) . ' patterns');
+        // error_log('[PatternsWP] Filtered to ' . count($filtered_patterns) . ' patterns');
         return $filtered_patterns;
     }
     
