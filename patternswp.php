@@ -5,7 +5,7 @@
  * Description:       A growing library of ready-made block patterns can help you build websites faster in no time.
  * Author:            PatternsWP
  * Author URI:        https://thepatternswp.com
- * Version:           1.0.9
+ * Version:           1.0.10
  * License:           GPL-2.0+
  * License URI:       http://www.gnu.org/licenses/gpl-2.0.txt
  * Text Domain:       patternswp
@@ -20,7 +20,7 @@ if (!defined('WPINC')) {
 // Define plugin constants.
 define('PWP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('PWP_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('PWP_P_VERSION', '1.0.9');
+define('PWP_P_VERSION', '1.0.10');
 define('PWP_PLUGIN_FILE', __FILE__);
 define('PWP_ABSPATH', dirname(__FILE__) . '/');
 define('PWP_VERSION', get_file_data(__FILE__, ['Version'])[0]);
