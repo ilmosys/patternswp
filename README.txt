@@ -1,14 +1,14 @@
 === PatternsWP - Gutenberg Block Patterns & Page Templates Library ===
 Contributors: patternswpteam, ilmosys, mahdiali
-Tags: patterns, templates, gutenberg, blocks, library, block patterns, layouts, block, pattern, template, layout, block editor, page builder, gutenberg patterns, wordpress patterns
+Tags: patterns, templates, gutenberg, blocks, library, block patterns, layouts, block, pattern, template, layout, block editor, page builder, starter sites, wordpress patterns
 Requires at least: 6.0
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.0
-Stable tag: 1.0.9
+Stable tag: 1.0.10
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
-Explore a library of pre-designed Gutenberg block patterns and page templates that are compatible with any WordPress block theme. Build professional websites faster!
+Explore a library of pre-designed Gutenberg block patterns, page templates, and starter sites that are compatible with any WordPress block theme. Build professional websites faster!
 
 == Description ==
 
@@ -49,6 +49,9 @@ Customize which patterns appear in your editor with our powerful visibility cont
 * **Hide Core Patterns** - Remove all default WordPress core patterns from the pattern selector
 
 Access these settings in: WordPress Admin → PatternsWP → Settings → Pattern Visibility
+
+###Recommended Theme###
+- <a href="https://wordpress.org/themes/blockera/">Blockera Block Theme</a>
 
 = Privacy =
 At PatternsWP, we are committed to protecting the privacy of our users. PatternsWP accesses block patterns and categories from our servers through a custom API. By activating the PatternsWP plugin, you agree to our [privacy policy](https://thepatternswp.com/privacy-policy/) and [terms of service](https://thepatternswp.com/terms-of-service/).
@@ -109,6 +112,9 @@ We’d love to hear from you! If you have suggestions, feedback, or have found a
 3. Search the Library, Select Patterns With One Click, and Use Them on Your WordPress Site
 
 == Changelog ==
+= 1.0.10 - 01 Jun, 2026 =
+* Updated: Tested up to WordPress 7.0
+
 = 1.0.9 - 04 Apr, 2026 =
 * Fixed: Restricted debug output
 
