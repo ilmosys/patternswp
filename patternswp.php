@@ -5,7 +5,7 @@
  * Description:       A growing library of ready-made block patterns can help you build websites faster in no time.
  * Author:            PatternsWP
  * Author URI:        https://thepatternswp.com
- * Version:           1.0.10
+ * Version:           1.1.0
  * License:           GPL-2.0+
  * License URI:       http://www.gnu.org/licenses/gpl-2.0.txt
  * Text Domain:       patternswp
@@ -20,7 +20,7 @@ if (!defined('WPINC')) {
 // Define plugin constants.
 define('PWP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('PWP_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('PWP_P_VERSION', '1.0.10');
+define('PWP_P_VERSION', '1.1.0');
 define('PWP_PLUGIN_FILE', __FILE__);
 define('PWP_ABSPATH', dirname(__FILE__) . '/');
 define('PWP_VERSION', get_file_data(__FILE__, ['Version'])[0]);
@@ -39,61 +39,150 @@ function patternswp_enqueue_editor_assets() {
     $get_license_data = get_option('patternswp_plugin_license_data');
     $is_active = isset($get_license_data['activated']) ? $get_license_data['activated'] : false;
 
-    $script_asset = patternswp_get_asset_file('build/patternswp-editor');
+    $script_path = 'assets/js/patternswp-editor.js';
+    $script_deps =     array(
+        'lodash',
+        'wp-a11y',
+        'wp-block-editor',
+        'wp-blocks',
+        'wp-components',
+        'wp-compose',
+        'wp-data',
+        'wp-dom-ready',
+        'wp-element',
+        'wp-i18n',
+        'wp-notices',
+        'wp-plugins',
+        'wp-editor',
+        'wp-primitives',
+    );
+
     wp_enqueue_script(
-        'patternswp-editor-scripts', 
-        PWP_PLUGIN_URL . 'build/patternswp-editor.js', 
-        array_merge($script_asset['dependencies'], ['wp-api']), 
-        $script_asset['version'], 
+        'patternswp-editor-scripts',
+        PWP_PLUGIN_URL . $script_path,
+        $script_deps,
+        patternswp_asset_version( $script_path ),
         true
     );
 
-    $patternswp_api_section = new PatternsWP_API_Section();
-    $localize_data = [
-        'isLicenseActive' => $is_active,
-        'externalPatterns' => [],
+    $patternswp_api_section = PatternsWP_API_Section::get_instance();
+    $localize_data = array(
+        'isLicenseActive'   => (bool) $is_active,
+        'externalPatterns'  => array(),
         'patternCategories' => $patternswp_api_section->get_patternswp_category_type(),
-        'patternsNonce' => wp_create_nonce('patternswp_nonce'),
-    ];
+        'patternsNonce'     => wp_create_nonce( 'patternswp_nonce' ),
+    );
 
-    wp_localize_script('patternswp-editor-scripts', 'patternsWpData', $localize_data);
+    wp_localize_script( 'patternswp-editor-scripts', 'patternsWpData', $localize_data );
 
-    $style_asset = patternswp_get_asset_file('build/block-pattern-inserter-editor-styles');
-    wp_enqueue_style('patternswp-editor-styles', PWP_PLUGIN_URL . 'build/style-patternswp-editor-styles.css', [], $style_asset['version']);
+	patternswp_register_editor_style();
+	wp_enqueue_style( 'patternswp-editor-styles' );
 }
-add_action('enqueue_block_editor_assets', 'patternswp_enqueue_editor_assets');
+add_action( 'enqueue_block_editor_assets', 'patternswp_enqueue_editor_assets' );
 
 /**
- * Get asset file data.
+ * Register shared editor stylesheet handle.
  */
-function patternswp_get_asset_file($filepath) {
+function patternswp_register_editor_style() {
+	$style_path = 'assets/css/patternswp-editor.css';
+	wp_register_style(
+		'patternswp-editor-styles',
+		PWP_PLUGIN_URL . $style_path,
+		array( 'wp-components' ),
+		patternswp_asset_version( $style_path )
+	);
+}
+
+/**
+ * Load styles into the iframed editor canvas (block content lives there in WP 6.3+).
+ * enqueue_block_editor_assets alone only reaches the parent chrome / modal portals.
+ */
+function patternswp_enqueue_canvas_styles() {
+	if ( ! is_admin() ) {
+		return;
+	}
+	patternswp_register_editor_style();
+	wp_enqueue_style( 'patternswp-editor-styles' );
+}
+add_action( 'enqueue_block_assets', 'patternswp_enqueue_canvas_styles' );
+
+/**
+ * Register the PatternsWP Pattern Library launcher block.
+ *
+ * Renders nothing on the front end — it is an editor-only entry point
+ * for browsing and inserting patterns (similar to a pattern inserter).
+ */
+function patternswp_register_blocks() {
+	patternswp_register_editor_style();
+
+	register_block_type(
+		'patternswp/library',
+		array(
+			'api_version'     => 3,
+			'title'           => __( 'PatternsWP Pattern Library', 'patternswp' ),
+			'description'     => __( 'Browse the PatternsWP pattern library and insert patterns into your page.', 'patternswp' ),
+			'category'        => 'widgets',
+			'icon'            => 'layout',
+			'keywords'        => array( 'patternswp', 'patterns', 'library', 'templates', 'blocks' ),
+			'supports'        => array(
+				'html'     => false,
+				'multiple' => true,
+				'reusable' => false,
+			),
+			'editor_style'    => 'patternswp-editor-styles',
+			'render_callback' => '__return_empty_string',
+		)
+	);
+}
+add_action( 'init', 'patternswp_register_blocks' );
+
+/**
+ * Get asset file data (legacy build/*.asset.php support).
+ */
+function patternswp_get_asset_file( $filepath ) {
     $asset_path = PWP_ABSPATH . $filepath . '.asset.php';
-    return file_exists($asset_path) ? require_once $asset_path : ['dependencies' => [], 'version' => PWP_VERSION];
+    return file_exists( $asset_path ) ? require $asset_path : array(
+        'dependencies' => array(),
+        'version'      => PWP_VERSION,
+    );
+}
+
+/**
+ * Cache-busting version for ready-to-use assets.
+ *
+ * @param string $relative_path Path relative to the plugin root.
+ * @return string
+ */
+function patternswp_asset_version( $relative_path ) {
+    $absolute = PWP_PLUGIN_DIR . ltrim( $relative_path, '/' );
+    if ( file_exists( $absolute ) ) {
+        return (string) filemtime( $absolute );
+    }
+    return PWP_VERSION;
 }
 
 // Plugin activation hook.
-register_activation_hook(__FILE__, 'patternswp_schedule_hourly_cron');
+register_activation_hook(__FILE__, 'patternswp_schedule_daily_cron');
 
-function patternswp_schedule_hourly_cron() {
-    if ( !wp_next_scheduled( 'patternswp_hourly_transient_load' ) ) {
-        wp_schedule_event( time(), 'hourly', 'patternswp_hourly_transient_load' );
+function patternswp_schedule_daily_cron() {
+    wp_clear_scheduled_hook( 'patternswp_hourly_transient_load' );
+    if ( ! wp_next_scheduled( 'patternswp_daily_transient_load' ) ) {
+        wp_schedule_event( time() + 5, 'daily', 'patternswp_daily_transient_load' );
     }
 }
 
 // Plugin deactivation hook.
-register_deactivation_hook(__FILE__, 'patternswp_remove_hourly_cron');
+register_deactivation_hook(__FILE__, 'patternswp_remove_daily_cron');
 
-function patternswp_remove_hourly_cron() {
-    $timestamp = wp_next_scheduled( 'patternswp_hourly_transient_load' );
-    if ( $timestamp ) {
-        wp_unschedule_event( $timestamp, 'patternswp_hourly_transient_load' );
-    }
+function patternswp_remove_daily_cron() {
+    wp_clear_scheduled_hook( 'patternswp_hourly_transient_load' );
+    wp_clear_scheduled_hook( 'patternswp_daily_transient_load' );
 }
 
 /**
  * AJAX handler to fetch patterns.
  */
-function fetch_patterns_handler() {
+function patternswp_fetch_patterns_handler() {
 
     // Verify nonce
     if (!isset($_POST['nonce'])) {
@@ -106,7 +195,12 @@ function fetch_patterns_handler() {
     if (!wp_verify_nonce($nonce, 'patternswp_nonce')) {
         wp_send_json_error('Invalid nonce');
         wp_die();
-    }    
+    }
+
+    if (!current_user_can('edit_posts')) {
+        wp_send_json_error('Forbidden');
+        wp_die();
+    }
 
     if (!isset($_POST['page']) || !isset($_POST['patternsPerPage'])) {
         wp_send_json_error('Missing parameters');
@@ -118,19 +212,10 @@ function fetch_patterns_handler() {
     $search = sanitize_text_field(wp_unslash($_POST['search'] ?? ''));
     $category = sanitize_text_field(wp_unslash($_POST['category'] ?? ''));
 
-    $cache_key = 'patternswp_' . md5("$page-$patterns_per_page-$search-$category");
-    $cached_data = get_transient($cache_key);
-
-    if ($cached_data !== false) {
-        wp_send_json_success($cached_data);
-        wp_die();
-    }
-
-    $patternswp_api_section = new PatternsWP_API_Section();
+    $patternswp_api_section = PatternsWP_API_Section::get_instance();
     $localize_data_ajax = $patternswp_api_section->get_patternswp_pattern($page, $patterns_per_page, $search, $category);
 
     if (is_array($localize_data_ajax)) {
-        set_transient($cache_key, $localize_data_ajax, 3600);
         wp_send_json_success($localize_data_ajax);
     } else {
         wp_send_json_error('Failed to fetch patterns');
@@ -138,8 +223,7 @@ function fetch_patterns_handler() {
 
     wp_die();
 }
-add_action('wp_ajax_fetch_patterns', 'fetch_patterns_handler');
-add_action('wp_ajax_nopriv_fetch_patterns', 'fetch_patterns_handler');
+add_action('wp_ajax_fetch_patterns', 'patternswp_fetch_patterns_handler');
 
 /**
  * Add plugin action links.
@@ -167,7 +251,6 @@ add_filter('plugin_action_links', 'patternswp_plugin_action_links', 10, 2);
 function patternswp_add_plugin_meta_links($links, $file) {
     if ($file === plugin_basename(__FILE__)) {
         $links[] = '<a href="https://thepatternswp.com/suggest-feature" target="_blank">Suggest a Feature</a>';
-        $links[] = '<a href="https://wordpress.org/support/plugin/patternswp/reviews/?filter=5" target="_blank">Rate Us</a>';
     }
     return $links;
 }

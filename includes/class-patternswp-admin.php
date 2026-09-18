@@ -16,10 +16,12 @@ class PatternsWP_Admin {
     public function __construct() {
         // Add menu and pages
         add_action('admin_menu', array($this, 'add_admin_menu'));
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
         add_action('admin_init', array($this, 'patternswp_clear_cache'));
-        add_action('admin_init', array($this, 'patternswp_ensure_hourly_cron'));
+        add_action('admin_init', array($this, 'patternswp_ensure_daily_cron'));
         add_action('wp_ajax_patternswp_background_transient_load_ajax', array($this, 'patternswp_background_transient_load_ajaxcc'));
-        add_action('wp_ajax_nopriv_patternswp_background_transient_load_ajax', array($this, 'patternswp_background_transient_load_ajaxcc'));
+        add_action('wp_ajax_patternswp_save_settings', array($this, 'ajax_save_settings'));
+        add_action('wp_ajax_patternswp_clear_cache_ajax', array($this, 'ajax_clear_cache'));
         add_action('patternswp_load_patterns_by_ra', array($this, 'patternswp_load_patterns_by_remote_ajax'));
         register_activation_hook(plugin_dir_path(__DIR__) . 'patternswp.php', array($this, 'patternswp_on_activation'));
         add_action('admin_init', array($this, 'patternswp_redirect_on_activation'));
@@ -36,8 +38,6 @@ class PatternsWP_Admin {
         add_action('init', array($this, 'maybe_deregister_theme_patterns'), 9999);
         add_action('init', array($this, 'maybe_deregister_uncategorized_patterns'), 10000);
         add_action('init', array($this, 'maybe_deregister_core_patterns'), 10001);
-        
-        // error_log('[PatternsWP] Constructor - All pattern deregistration hooks registered');
         
         // Apply filters for different pattern sources
         add_filter('patternswp_patterns', array($this, 'filter_patterns_by_visibility'), 20);
@@ -61,6 +61,226 @@ class PatternsWP_Admin {
         
         // Add a test hook to verify settings are loaded
         add_action('wp_loaded', array($this, 'test_settings'));
+    }
+
+    /**
+     * Whether the current screen is a PatternsWP admin page.
+     *
+     * @param string $hook_suffix Current admin page hook.
+     * @return bool
+     */
+    private function is_patternswp_admin_page( $hook_suffix ) {
+        $pages = array(
+            'toplevel_page_patternswp-plugin-menu',
+            'patternswp_page_patternswp-settings',
+            'patternswp_page_patternswp-plugin-page-1',
+            'patternswp_page_patternswp-license_section',
+        );
+        return in_array( $hook_suffix, $pages, true );
+    }
+
+    /**
+     * Map menu slug to React page id.
+     *
+     * @return string
+     */
+    private function get_current_admin_page_id() {
+        $page = isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : 'patternswp-plugin-menu'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $map  = array(
+            'patternswp-plugin-menu'      => 'dashboard',
+            'patternswp-settings'         => 'settings',
+            'patternswp-plugin-page-1'    => 'support',
+            'patternswp-license_section'  => 'license',
+        );
+        return isset( $map[ $page ] ) ? $map[ $page ] : 'dashboard';
+    }
+
+    /**
+     * Enqueue React admin assets on PatternsWP screens.
+     *
+     * @param string $hook_suffix Current admin page hook.
+     */
+    public function enqueue_admin_assets( $hook_suffix ) {
+        if ( ! $this->is_patternswp_admin_page( $hook_suffix ) ) {
+            return;
+        }
+
+        $script_path = 'assets/js/patternswp-admin.js';
+        $style_path  = 'assets/css/patternswp-admin.css';
+
+        wp_enqueue_style( 'wp-components' );
+        wp_enqueue_style(
+            'patternswp-admin-styles',
+            PWP_PLUGIN_URL . $style_path,
+            array( 'wp-components' ),
+            patternswp_asset_version( $style_path )
+        );
+
+        wp_enqueue_script(
+            'patternswp-admin-scripts',
+            PWP_PLUGIN_URL . $script_path,
+            array(
+                'wp-element',
+                'wp-components',
+                'wp-i18n',
+                'wp-api-fetch',
+                'wp-dom-ready',
+                'wp-primitives',
+            ),
+            patternswp_asset_version( $script_path ),
+            true
+        );
+
+        $license_option = get_option( 'patternswp_license_key', array() );
+        $license_key    = isset( $license_option['patternswp_pro_license_key'] ) ? $license_option['patternswp_pro_license_key'] : '';
+        $license_data   = get_option( 'patternswp_plugin_license_data', array() );
+        $is_active      = ! empty( $license_data['activated'] );
+
+        if ( ! empty( $license_key ) && strlen( $license_key ) > 8 ) {
+            $masked_key = substr( $license_key, 0, 8 ) . str_repeat( 'X', strlen( $license_key ) - 8 );
+        } else {
+            $masked_key = $license_key;
+        }
+
+        $initial_notice = null;
+        if ( isset( $_GET['pt_msg'] ) && ! empty( $_GET['pt_msg'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            $status = isset( $_GET['status'] ) ? sanitize_text_field( wp_unslash( $_GET['status'] ) ) : 'info'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            $notice_status = 'info';
+            if ( 'success' === $status ) {
+                $notice_status = 'success';
+            } elseif ( 'error' === $status ) {
+                $notice_status = 'error';
+            }
+            $initial_notice = array(
+                'status'  => $notice_status,
+                'message' => sanitize_text_field( urldecode( wp_unslash( $_GET['pt_msg'] ) ) ), // phpcs:ignore WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+            );
+        }
+
+        $images_base = plugin_dir_url( __FILE__ );
+
+        wp_localize_script(
+            'patternswp-admin-scripts',
+            'patternswpAdmin',
+            array(
+                'ajaxUrl'         => admin_url( 'admin-ajax.php' ),
+                'adminUrl'        => admin_url( 'admin.php' ),
+                'newPageUrl'      => admin_url( 'post-new.php?post_type=page' ),
+                'nonce'           => wp_create_nonce( 'patternswp_admin_nonce' ),
+                'currentPage'     => $this->get_current_admin_page_id(),
+                'userName'       => wp_get_current_user()->display_name,
+                'pluginVersion'   => PWP_P_VERSION,
+                'isLicenseActive' => (bool) $is_active,
+                'settings'        => array(
+                    'hideThemePatterns'         => (bool) rest_sanitize_boolean( get_option( 'patternswp_hide_theme_patterns', false ) ),
+                    'hideUncategorizedPatterns' => (bool) rest_sanitize_boolean( get_option( 'patternswp_hide_uncategorized_patterns', false ) ),
+                    'hideCorePatterns'          => (bool) rest_sanitize_boolean( get_option( 'patternswp_hide_core_patterns', false ) ),
+                ),
+                'license'         => array(
+                    'maskedKey' => $masked_key,
+                    'activated' => (bool) $is_active,
+                ),
+                'images'          => array(
+                    'step1' => $images_base . 'pwp-welcome-01.png',
+                    'step2' => $images_base . 'pwp-welcome-02.png',
+                    'step3' => $images_base . 'pwp-welcome-03.png',
+                ),
+                'initialNotice'   => $initial_notice,
+            )
+        );
+    }
+
+    /**
+     * Shared React mount markup for all admin pages.
+     *
+     * @param string $page_title Screen reader / fallback title.
+     */
+    private function render_admin_app( $page_title ) {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        ?>
+        <div class="wrap patternswp-admin-wrap">
+            <h1 class="screen-reader-text"><?php echo esc_html( $page_title ); ?></h1>
+            <div id="patternswp-admin-root">
+                <div class="patternswp-admin__loading">
+                    <span class="spinner is-active" style="float:none;margin:0;"></span>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * AJAX: save pattern visibility settings.
+     */
+    public function ajax_save_settings() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => __( 'You do not have permission to manage these settings.', 'patternswp' ) ), 403 );
+        }
+
+        check_ajax_referer( 'patternswp_admin_nonce', 'nonce' );
+
+        $hide_theme = ! empty( $_POST['hide_theme_patterns'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['hide_theme_patterns'] ) );
+        $hide_uncat = ! empty( $_POST['hide_uncategorized_patterns'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['hide_uncategorized_patterns'] ) );
+        $hide_core  = ! empty( $_POST['hide_core_patterns'] ) && '1' === sanitize_text_field( wp_unslash( $_POST['hide_core_patterns'] ) );
+
+        update_option( 'patternswp_hide_theme_patterns', $hide_theme ? 1 : 0, false );
+        update_option( 'patternswp_hide_uncategorized_patterns', $hide_uncat ? 1 : 0, false );
+        update_option( 'patternswp_hide_core_patterns', $hide_core ? 1 : 0, false );
+
+        wp_send_json_success(
+            array(
+                'message'  => __( 'Settings saved.', 'patternswp' ),
+                'settings' => array(
+                    'hideThemePatterns'         => $hide_theme,
+                    'hideUncategorizedPatterns' => $hide_uncat,
+                    'hideCorePatterns'          => $hide_core,
+                ),
+            )
+        );
+    }
+
+    /**
+     * AJAX: clear pattern cache.
+     */
+    public function ajax_clear_cache() {
+        global $wpdb;
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => __( 'You do not have permission to clear the cache.', 'patternswp' ) ), 403 );
+        }
+
+        check_ajax_referer( 'patternswp_admin_nonce', 'nonce' );
+
+        delete_transient( 'patternswp_category_type' );
+
+        $pattern = '_transient_patternswp_';
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $results = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM $wpdb->options WHERE option_name LIKE %s", $wpdb->esc_like( $pattern ) . '%' ) );
+
+        $patterns = 'patterns_cache_';
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+        $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM $wpdb->options WHERE option_name LIKE %s",
+                $wpdb->esc_like( $patterns ) . '%'
+            )
+        );
+
+        foreach ( $results as $transient ) {
+            delete_option( $transient );
+            delete_option( str_replace( '_transient_', '_transient_timeout_', $transient ) );
+        }
+
+        $this->clear_pattern_cache( false, false );
+        $this->patternswp_load_patterns_by_remote_ajax();
+
+        wp_send_json_success(
+            array(
+                'message' => __( 'Cache cleared successfully.', 'patternswp' ),
+            )
+        );
     }
     
     /**
@@ -125,8 +345,8 @@ class PatternsWP_Admin {
             'License' => 'patternswp-license_section'
         );
 
-        // Get the current page from URL parameter
-        $current_page = isset($_GET['page']) ? sanitize_text_field($_GET['page']) : 'patternswp-plugin-menu';
+        // Get the current page from URL parameter (read-only tab highlight; no state change).
+        $current_page = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : 'patternswp-plugin-menu'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         
         // Map page slugs to tab names
         $page_to_tab = array(
@@ -148,161 +368,23 @@ class PatternsWP_Admin {
     /**
      * Render main page
      */
-    public function render_main_page() { ?>
-        <div class="wrap">
-            <h1><?php esc_html_e('PatternsWP', 'patternswp'); ?></h1>
-            <h2 class="nav-tab-wrapper">
-                <?php $this->patterswp_tab( 'Dashboard' ); ?>
-            </h2>
-            <div class="patterns-wp-tabs-content">
-                <div id="tab-1" class="patterns-wp-tab-content patterns-wp-tab-active">
-                    <div class="wrap">
-                        <div class="pw-feature-box big-box" style="max-width: 1280px; padding: 40px; background-color: white; border-radius: 10px; overflow: hidden;">
-                            <div class="about__section has-1-columns">
-                                <div class="column" style="text-align:center;">
-                                    <h4><?php echo esc_html('Hello, ' . wp_get_current_user()->display_name . ' 👋'); ?></h4>
-                                    <h1 class="feature-title"><?php esc_html_e('Welcome to PatternsWP', 'patternswp'); ?></h1>
-                                    <p><?php esc_html_e('Thanks for choosing PatternsWP! Follow these three simple steps to get started!', 'patternswp'); ?></p>
-                                </div>
-                                <div class="column" style="padding: 10px; text-align: center;">
-                                    <a href="<?php echo esc_url(admin_url('post-new.php?post_type=page')); ?>" class="button button-primary">
-                                        <?php esc_html_e('Start building with PatternsWP', 'patternswp'); ?>
-                                    </a>
-                                </div>
-                            </div>
-                            <div class="about__section has-3-columns">
-                                <div class="column" style="padding: 40px;">
-                                    <div class="about__image">
-                                        <?php
-                                            // phpcs:ignore PluginCheck.CodeAnalysis.ImageFunctions.NonEnqueuedImage
-                                            echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . 'pwp-welcome-01.png') . '" alt="" height="auto" width="100%">';
-                                        ?>
-                                    </div>
-                                    <h4><?php esc_html_e('01. Open the PatternsWP Library', 'patternswp'); ?></h4>
-                                    <p><?php esc_html_e('When editing a page or post in the block editor, locate the PatternsWP Library button in the editor’s header. Click it to access a collection of pre-designed patterns and full-page templates.', 'patternswp'); ?></p>
-                                </div>
-                                <div class="column" style="padding: 40px;">
-                                    <div class="about__image">
-                                        <?php
-                                            // phpcs:ignore PluginCheck.CodeAnalysis.ImageFunctions.NonEnqueuedImage
-                                            echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . 'pwp-welcome-02.png') . '" alt="" height="auto" width="100%">';
-                                        ?>
-                                    </div>
-                                    <h4><?php esc_html_e('02. Browse Patterns & Templates', 'patternswp'); ?></h4>
-                                    <p><?php esc_html_e('Explore a diverse range of block patterns and full-page layouts. Use the search box or filter by category to quickly find the perfect design for your website.', 'patternswp'); ?></p>
-                                </div>
-                                <div class="column" style="padding: 40px;">
-                                    <div class="about__image">
-                                        <?php
-                                            // phpcs:ignore PluginCheck.CodeAnalysis.ImageFunctions.NonEnqueuedImage
-                                            echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . 'pwp-welcome-03.png') . '" alt="" height="auto" width="100%">';
-                                        ?>
-                                    </div>
-                                    <h4><?php esc_html_e('03. Add Patterns & Customize', 'patternswp'); ?></h4>
-                                    <p><?php esc_html_e('Once you’ve found the right pattern, add it to your page with a single click. Every pattern is fully customizable, allowing you to tweak colors, typography, and content effortlessly.', 'patternswp'); ?></p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div> 
-    <?php }
+    public function render_main_page() {
+        $this->render_admin_app( __( 'PatternsWP', 'patternswp' ) );
+    }
 
     /**
      * Support page
      */
-    public function patternswp_support() { ?>
-        <div class="wrap">
-            <h1><?php esc_html_e('Support', 'patternswp'); ?></h1>
-            <h2 class="nav-tab-wrapper">
-                <?php $this->patterswp_tab( 'Support' ); ?>
-            </h2>
-            <div class="patterns-wp-tabs-content">
-                <div id="tab-1" class="patterns-wp-tab-content patterns-wp-tab-active">
-                </div>
-                <div id="tab-2" class="patterns-wp-tab-content">
-                <div class="wrap">
-                        <div class="pw-feature-box big-box" style="max-width: 1280px; padding: 40px; background-color: white; border-radius: 10px; overflow: hidden;">
-                            <div class="about__section has-1-columns">
-                                <div class="column" style="">
-                                    <h1 class="feature-title"><?php esc_html_e('Support', 'patternswp'); ?></h1>
-                                    <p><?php esc_html_e('Need help with PatternsWP? Whether you have a question, need technical assistance, or just want to reach out, we’re here for you. Contact us, and we’ll be happy to assist!', 'patternswp'); ?></p>
-                                </div>
-                                <div style="height: 1px; background-color: #ccc; width: 100%; margin: 20px 0;"></div>
-                            </div>
-                            <div class="about__section has-2-columns">
-                                <div class="column" style="padding-right: 100px;">
-                                   
-                                    <h4><?php esc_html_e('Frequently asked questions', 'patternswp'); ?></h4>
-                                    <p>
-                                        <?php 
-                                        printf(
-                                            esc_attr('Here, you will find answers to commonly asked questions about using PatternsWP. If you need further assistance, feel free to %s.', 'patternswp'), 
-                                            '<a href="https://thepatternswp.com/contact/" target="_blank">'.esc_attr('contact us via the support form →', 'patternswp').'</a>'
-                                        ); 
-                                        ?>
-                                    </p>
-                                </div>
-                                <div class="column" style="padding: 0px;">
-                                <h5>
-                                    <a href="https://thepatternswp.com/docs/getting-started-with-patternswp/" target="_blank" style="color: #3858e9; text-decoration: none;">
-                                    <?php esc_html_e('Getting Started with PatternsWP →', 'patternswp'); ?>
-                                    </a>
-                                </h5>
-                                    <div style="height: 1px; background-color: #ccc; width: 100%; margin: 10px 0;"></div>
-                                <h5>
-                                    <a href="https://thepatternswp.com/docs/how-to-install-patternswp/" target="_blank" style="color: #3858e9; text-decoration: none;">
-                                    <?php esc_html_e('How to install PatternsWP →', 'patternswp'); ?>
-                                    </a>
-                                </h5>                                    <div style="height: 1px; background-color: #ccc; width: 100%; margin: 10px 0;"></div>
-                                <h5>
-                                    <a href="https://thepatternswp.com/docs/how-to-upgrade-patternswp-to-pro/" target="_blank" style="color: #3858e9; text-decoration: none;">
-                                    <?php esc_html_e('How to Upgrade PatternsWP to Pro →', 'patternswp'); ?>
-                                    </a>
-                                </h5>                                    <div style="height: 1px; background-color: #ccc; width: 100%; margin: 10px 0;"></div>
-                                <h5>
-                                    <a href="https://thepatternswp.com/docs/patternswp-support/" target="_blank" style="color: #3858e9; text-decoration: none;">
-                                    <?php esc_html_e('PatternsWP Support →', 'patternswp'); ?>
-                                    </a>
-                                </h5>                                    <div style="height: 1px; background-color: #ccc; width: 100%; margin: 10px 0;"></div>
-                                </div>  
-                                                              
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    <?php }
+    public function patternswp_support() {
+        $this->render_admin_app( __( 'Support', 'patternswp' ) );
+    }
 
     /**
      * Clear Cache page
      */
-    public function patternswp_clear_cache_form() { ?>
-        <div class="wrap">
-            <h1><?php esc_html_e('Clear Cache', 'patternswp'); ?></h1>
-            <h2 class="nav-tab-wrapper">
-                <?php $this->patterswp_tab( 'Clear Cache' ); ?>
-            </h2>
-            <div class="patterns-wp-tabs-content">
-                <div id="tab-1" class="patterns-wp-tab-content patterns-wp-tab-active">
-                    <div class="wrap">
-                        <div class="pw-feature-box big-box" style="max-width: 1280px; padding: 40px; background-color: white; border-radius: 10px; overflow: hidden; margin: 0 auto;">
-                            <div class="">
-                                <form id="patternswp_clearcache_form" method="post">
-                                    <?php wp_nonce_field('patternswp_clear_cache_action', 'patternswp_clear_cache_nonce'); ?>
-                                    <input name="patternswp_clear_cache" type="submit" class="button button-primary" value="Clear Cache">
-                                    <div>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    <?php }
+    public function patternswp_clear_cache_form() {
+        $this->render_admin_app( __( 'Clear Cache', 'patternswp' ) );
+    }
 
     /**
      * Clear pattern cache when theme is switched
@@ -351,7 +433,7 @@ class PatternsWP_Admin {
             }
 
             if (!current_user_can('manage_options')) {
-                wp_die(esc_attr('You do not have sufficient permissions to perform this action.', 'patternswp'));
+                wp_die(esc_html__('You do not have sufficient permissions to perform this action.', 'patternswp'));
             }
 
             // Delete category type transient
@@ -390,11 +472,14 @@ class PatternsWP_Admin {
     }
 
     /**
-     * Ensure hourly cron job is scheduled
+     * Ensure daily cron job is scheduled
      */
-    public function patternswp_ensure_hourly_cron() {
-        if ( ! wp_next_scheduled( 'patternswp_hourly_transient_load' ) ) {
-            wp_schedule_event( time(), 'hourly', 'patternswp_hourly_transient_load' );
+    public function patternswp_ensure_daily_cron() {
+        if ( wp_next_scheduled( 'patternswp_hourly_transient_load' ) ) {
+            wp_clear_scheduled_hook( 'patternswp_hourly_transient_load' );
+        }
+        if ( ! wp_next_scheduled( 'patternswp_daily_transient_load' ) ) {
+            wp_schedule_event( time(), 'daily', 'patternswp_daily_transient_load' );
         }
     }
 
@@ -402,21 +487,21 @@ class PatternsWP_Admin {
      * AJAX handler to load transient data
      */
     public function patternswp_background_transient_load_ajaxcc() {
-        do_action( 'patternswp_hourly_transient_load' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( -1, 403 );
+        }
+
+        check_ajax_referer( 'patternswp_admin_nonce', 'nonce' );
+
+        do_action( 'patternswp_daily_transient_load' );
         wp_die();
     }
 
     /**
-     * Load patterns via AJAX
+     * Warm pattern transients without an unauthenticated HTTP loopback.
      */
     public function patternswp_load_patterns_by_remote_ajax() {
-        $ajax_url = admin_url('admin-ajax.php');
-        wp_remote_post( $ajax_url , array(
-            'body'      => array( 'action' => 'patternswp_background_transient_load_ajax' ),
-            'timeout'   => 1,
-            'blocking'  => false,
-            'sslverify' => false,
-        ));
+        do_action( 'patternswp_daily_transient_load' );
     }
 
     /**
@@ -430,17 +515,16 @@ class PatternsWP_Admin {
      * Clear pattern cache when visibility settings change
      */
     public function clear_pattern_cache($old_value, $new_value) {
-        // Clear object cache first
-        if (function_exists('wp_cache_flush')) {
-            wp_cache_flush();
-        }
-        
         // Clear known transients
         $transients = [
             'patternswp_all_patterns',
             'patternswp_categorized_patterns',
             'patternswp_patterns_data',
-            'patternswp_categories'
+            'patternswp_categories',
+            'patternswp_api_token',
+            'patternswp_library_lock',
+            'patternswp_lib_free_count',
+            'patternswp_lib_pro_count',
         ];
         
         foreach ($transients as $transient) {
@@ -556,6 +640,14 @@ class PatternsWP_Admin {
     }
     
     /**
+     * Check if a registered block pattern belongs to PatternsWP.
+     */
+    private function is_patternswp_registry_pattern( $pattern_name ) {
+        return strpos( $pattern_name, 'patternswp-gutenberg-block-patterns/' ) === 0
+            || strpos( $pattern_name, 'patternswp/' ) === 0;
+    }
+
+    /**
      * Deregister core patterns.
      */
     public function maybe_deregister_core_patterns() {
@@ -579,6 +671,10 @@ class PatternsWP_Admin {
             // Core patterns typically have names starting with 'core/' or no file path
             $pattern_name = $pattern['name'] ?? '';
             $file_path = $pattern['filePath'] ?? '';
+
+            if ( $this->is_patternswp_registry_pattern( $pattern_name ) ) {
+                continue;
+            }
             
             // Check if it's a core pattern
             $is_core_pattern = false;
@@ -596,7 +692,7 @@ class PatternsWP_Admin {
                 $reason = 'file path contains wp-includes';
             }
             
-            // Method 3: Check if no file path (likely core pattern)
+            // Method 3: Check if no file path (likely core pattern, but not plugin-registered)
             if (!$is_core_pattern && empty($file_path)) {
                 $is_core_pattern = true;
                 $reason = 'no file path';
@@ -613,7 +709,9 @@ class PatternsWP_Admin {
      * Filter the block patterns list in the editor
      */
     public function filter_block_patterns_list($patterns) {
-        // error_log('[PatternsWP] filter_block_patterns_list called with ' . count($patterns) . ' patterns');
+        if ( ! is_array( $patterns ) ) {
+            return $patterns;
+        }
         
         $hide_theme_patterns = get_option('patternswp_hide_theme_patterns', false);
         $hide_uncategorized = get_option('patternswp_hide_uncategorized_patterns', false);
@@ -784,19 +882,14 @@ class PatternsWP_Admin {
             if (!$should_exclude && $hide_core_patterns) {
                 $pattern_name = $pattern['name'] ?? '';
                 $file_path = $pattern['filePath'] ?? '';
-                
-                // Method 1: Check if pattern name starts with 'core/'
-                if (strpos($pattern_name, 'core/') === 0) {
+
+                if ( $this->is_patternswp_registry_pattern( $pattern_name ) ) {
+                    // Keep PatternsWP patterns visible.
+                } elseif (strpos($pattern_name, 'core/') === 0) {
                     $should_exclude = true;
-                }
-                
-                // Method 2: Check if file path contains wp-includes
-                if (!$should_exclude && !empty($file_path) && strpos($file_path, 'wp-includes') !== false) {
+                } elseif (!empty($file_path) && strpos($file_path, 'wp-includes') !== false) {
                     $should_exclude = true;
-                }
-                
-                // Method 3: Check if no file path (likely core pattern)
-                if (!$should_exclude && empty($file_path)) {
+                } elseif (empty($file_path)) {
                     $should_exclude = true;
                 }
             }
@@ -828,27 +921,24 @@ class PatternsWP_Admin {
         
         // Add exclude filter using direct SQL for better performance
         if (!empty($exclude_patterns)) {
-            add_filter('posts_where', function($where) use ($exclude_patterns) {
+            $pwp_posts_where_filter = function($where) use ($exclude_patterns, &$pwp_posts_where_filter) {
                 global $wpdb;
+
+                // Self-remove so this filter does not leak into other queries.
+                remove_filter( 'posts_where', $pwp_posts_where_filter );
                 
-                // Prepare placeholders for the IN clause
-                $placeholders = array_fill(0, count($exclude_patterns), '%s');
-                $placeholders = implode(',', $placeholders);
-                
-                // Prepare the exclusion subquery
-                $exclude_sql = $wpdb->prepare(
-                    "SELECT post_id 
-                     FROM {$wpdb->postmeta} 
-                     WHERE meta_key = 'pattern_id' 
-                     AND meta_value IN ($placeholders)",
-                    $exclude_patterns
-                );
+                $placeholders = implode( ',', array_fill( 0, count( $exclude_patterns ), '%s' ) );
+                $query        = 'SELECT post_id FROM ' . $wpdb->postmeta . ' WHERE meta_key = %s AND meta_value IN (' . $placeholders . ')';
+
+                // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $placeholders is a list of %s tokens; values are bound below.
+                $exclude_sql = $wpdb->prepare( $query, array_merge( array( 'pattern_id' ), $exclude_patterns ) );
                 
                 // Add the exclusion to the WHERE clause
                 $where .= " AND {$wpdb->posts}.ID NOT IN ($exclude_sql)";
                 
                 return $where;
-            });
+            };
+            add_filter( 'posts_where', $pwp_posts_where_filter );
             
             // Ensure we don't use post__not_in or meta_query
             unset($args['post__not_in']);
@@ -882,10 +972,17 @@ class PatternsWP_Admin {
                          $pattern['categories'] : 
                          array_map('trim', explode(',', $pattern['categories']));
             
-            foreach ($categories as $category) {
-                if (is_string($category) && 
-                   (stripos($category, 'theme') !== false || 
-                    stripos($category, 'template') !== false)) {
+            foreach ( $categories as $category ) {
+                if ( ! is_string( $category ) ) {
+                    continue;
+                }
+
+                // PatternsWP library slugs such as patternswp-page-templates.
+                if ( 0 === strpos( $category, 'patternswp-' ) || 0 === strpos( $category, 'patternswp/' ) ) {
+                    continue;
+                }
+
+                if ( false !== stripos( $category, 'theme' ) || false !== stripos( $category, 'template' ) ) {
                     return true;
                 }
             }
@@ -951,7 +1048,6 @@ class PatternsWP_Admin {
         foreach ($patterns as $pattern) {
             // Skip if pattern is not an array
             if (!is_array($pattern)) {
-                $filtered_patterns[] = $pattern;
                 continue;
             }
 
@@ -1081,94 +1177,7 @@ class PatternsWP_Admin {
      * Render Pattern Visibility page
      */
     public function render_pattern_visibility_page() {
-        // Check user capabilities
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-
-        // Show success/error messages
-        if (isset($_GET['settings-updated'])) {
-            add_settings_error(
-                'patternswp_messages',
-                'patternswp_message',
-                __('Settings Saved', 'patternswp'),
-                'updated'
-            );
-        }
-        
-        // Show cache clear messages from transient
-        $cache_message = get_transient('patternswp_cache_cleared');
-        if ($cache_message) {
-            add_settings_error(
-                'patternswp_messages',
-                'patternswp_cache_message',
-                $cache_message,
-                'updated'
-            );
-            // Delete the transient so it only shows once
-            delete_transient('patternswp_cache_cleared');
-        } elseif (isset($_GET['pt_msg']) && isset($_GET['status'])) {
-            // Keep backward compatibility with URL parameters
-            $message = sanitize_text_field(wp_unslash($_GET['pt_msg']));
-            $status = sanitize_text_field(wp_unslash($_GET['status']));
-            $type = $status === 'success' ? 'updated' : 'error';
-            
-            add_settings_error(
-                'patternswp_messages',
-                'patternswp_cache_message',
-                $message,
-                $type
-            );
-        }
-        
-        settings_errors('patternswp_messages');
-        ?>
-        <div class="wrap">
-            <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
-            
-            <h2 class="nav-tab-wrapper">
-                <?php 
-                $this->patterswp_tab(''); 
-                ?>
-            </h2>
-            <div class="patterns-wp-tabs-content">
-                <div id="tab-1" class="patterns-wp-tab-content patterns-wp-tab-active">
-                    <div class="wrap">
-                        <div class="pw-feature-box big-box" style="max-width: 1280px; padding: 40px; background-color: white; border-radius: 10px; overflow: hidden; margin: 0 auto;">
-                <form action="options.php" method="post">
-                    <?php
-                    // Output security fields
-                    settings_fields('patternswp_visibility_settings');
-                    // Output settings sections and fields
-                    do_settings_sections('patternswp-settings');
-                    // Output save settings button
-                    submit_button(__('Save Settings', 'patternswp'));
-                    ?>
-                </form>
-                
-                <hr style="margin: 30px 0;">
-                
-                <h3><?php esc_html_e('Cache Management', 'patternswp'); ?></h3>
-                <p><?php esc_html_e('Clear all cached patterns and data. This may be necessary if patterns are not updating correctly or after changing visibility settings.', 'patternswp'); ?></p>
-                
-                <form method="post" action="">
-                    <?php wp_nonce_field('patternswp_clear_cache_action', 'patternswp_clear_cache_nonce'); ?>
-                    <input type="hidden" name="patternswp_clear_cache" value="1">
-                    <?php
-                    submit_button(
-                        __('Clear All Cache', 'patternswp'),
-                        'primary',
-                        'patternswp_clear_cache',
-                        false
-                    );
-                    ?>
-                </form>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <?php
+        $this->render_admin_app( __( 'Settings', 'patternswp' ) );
     }
 
     /**

@@ -1,14 +1,14 @@
 === PatternsWP - Gutenberg Block Patterns & Page Templates Library ===
 Contributors: patternswpteam, ilmosys, mahdiali
-Tags: patterns, templates, gutenberg, blocks, library, block patterns, layouts, block, pattern, template, layout, block editor, page builder, starter sites, wordpress patterns
+Tags: patterns, templates, gutenberg, blocks patterns, starter sites
 Requires at least: 6.0
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 7.0
-Stable tag: 1.0.10
+Stable tag: 1.1.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
-Explore a library of pre-designed Gutenberg block patterns, page templates, and starter sites that are compatible with any WordPress block theme. Build professional websites faster!
+Explore Gutenberg block patterns, page templates, and starter sites compatible with any WordPress block theme. Build professional websites faster!
 
 == Description ==
 
@@ -80,13 +80,10 @@ After activating the plugin, you can either edit an existing page or create a ne
 
 = [C] To insert patterns into a WordPress post or page, follow these quick steps: =
 1. Access the post or page editor.
-2. Add a new block or select an existing one.
-3. Click the "+" icon to open the block inserter.
-4. Look for the "PatternsWP" category.
-5. Choose a pattern and insert it.
-6. Customize the pattern as per needed.
-7. Repeat for additional patterns.
-8. Preview or publish your post or page.
+2. Add the PatternsWP Pattern Library block (search “patternswp” or type `/patternswp`), or click PatternsWP Library in the editor header.
+3. Click “Open PatternsWP Pattern Library”, or use Instant Search to find a pattern.
+4. Insert the pattern you want, then customize it as needed.
+5. Preview or publish your post or page.
 
 == Frequently Asked Questions ==
 
@@ -112,6 +109,16 @@ We’d love to hear from you! If you have suggestions, feedback, or have found a
 3. Search the Library, Select Patterns With One Click, and Use Them on Your WordPress Site
 
 == Changelog ==
+= 1.1.0 - 18 Sep, 2026 =
+* Major UI update: Redesigned patterns library modal using WordPress Gutenberg components
+* Added: PatternsWP Pattern Library block with Open Library button and Instant Search
+* Added: Sorting and filter type option added
+* Added: Favorites and recently used patterns
+* Improved: Faster category switching with client-side page cache
+* Improved: Infinite scroll and preview performance (lazy BlockPreview)
+* Fixed: Pattern pagination starting from page one
+* Updated: Tested up to WordPress 7.1
+
 = 1.0.10 - 01 Jun, 2026 =
 * Updated: Tested up to WordPress 7.0
 
