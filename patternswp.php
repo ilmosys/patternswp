@@ -71,6 +71,8 @@ function patternswp_enqueue_editor_assets() {
         'externalPatterns'  => array(),
         'patternCategories' => $patternswp_api_section->get_patternswp_category_type(),
         'patternsNonce'     => wp_create_nonce( 'patternswp_nonce' ),
+        'libraryComplete'   => $patternswp_api_section->is_catalog_ready(),
+        'ajaxUrl'           => admin_url( 'admin-ajax.php' ),
     );
 
     wp_localize_script( 'patternswp-editor-scripts', 'patternsWpData', $localize_data );
@@ -167,7 +169,10 @@ register_activation_hook(__FILE__, 'patternswp_schedule_daily_cron');
 function patternswp_schedule_daily_cron() {
     wp_clear_scheduled_hook( 'patternswp_hourly_transient_load' );
     if ( ! wp_next_scheduled( 'patternswp_daily_transient_load' ) ) {
-        wp_schedule_event( time() + 5, 'daily', 'patternswp_daily_transient_load' );
+        wp_schedule_event( time() + DAY_IN_SECONDS, 'daily', 'patternswp_daily_transient_load' );
+    }
+    if ( ! wp_next_scheduled( 'patternswp_library_warm' ) ) {
+        wp_schedule_single_event( time() + 3, 'patternswp_library_warm' );
     }
 }
 
@@ -177,6 +182,7 @@ register_deactivation_hook(__FILE__, 'patternswp_remove_daily_cron');
 function patternswp_remove_daily_cron() {
     wp_clear_scheduled_hook( 'patternswp_hourly_transient_load' );
     wp_clear_scheduled_hook( 'patternswp_daily_transient_load' );
+    wp_clear_scheduled_hook( 'patternswp_library_warm' );
 }
 
 /**
@@ -202,6 +208,8 @@ function patternswp_fetch_patterns_handler() {
         wp_die();
     }
 
+    patternswp_release_ajax_lock();
+
     if (!isset($_POST['page']) || !isset($_POST['patternsPerPage'])) {
         wp_send_json_error('Missing parameters');
         wp_die();
@@ -213,7 +221,13 @@ function patternswp_fetch_patterns_handler() {
     $category = sanitize_text_field(wp_unslash($_POST['category'] ?? ''));
 
     $patternswp_api_section = PatternsWP_API_Section::get_instance();
-    $localize_data_ajax = $patternswp_api_section->get_patternswp_pattern($page, $patterns_per_page, $search, $category);
+
+    try {
+        $localize_data_ajax = $patternswp_api_section->query_library_page($page, $patterns_per_page, $search, $category);
+    } catch ( \Throwable $e ) {
+        wp_send_json_error( 'Failed to fetch patterns' );
+        wp_die();
+    }
 
     if (is_array($localize_data_ajax)) {
         wp_send_json_success($localize_data_ajax);
@@ -224,6 +238,61 @@ function patternswp_fetch_patterns_handler() {
     wp_die();
 }
 add_action('wp_ajax_fetch_patterns', 'patternswp_fetch_patterns_handler');
+
+/**
+ * AJAX: continue downloading the catalog in short bursts.
+ */
+function patternswp_warm_library_handler() {
+    if (!isset($_POST['nonce'])) {
+        wp_send_json_error('Missing nonce');
+    }
+
+    $nonce = sanitize_text_field(wp_unslash($_POST['nonce']));
+    if (!wp_verify_nonce($nonce, 'patternswp_nonce')) {
+        wp_send_json_error('Invalid nonce');
+    }
+
+    if (!current_user_can('edit_posts')) {
+        wp_send_json_error('Forbidden');
+    }
+
+    patternswp_release_ajax_lock();
+
+    $api = PatternsWP_API_Section::get_instance();
+    $mode = isset($_POST['mode']) ? sanitize_key(wp_unslash($_POST['mode'])) : 'sync';
+    $force = ! empty($_POST['force']);
+
+    try {
+        if ( 'check' === $mode ) {
+            $status = $api->maybe_pull_remote_updates( $force );
+        } else {
+            $status = $api->warm_library_for_request();
+        }
+    } catch ( \Throwable $e ) {
+        wp_send_json_error('Failed to refresh patterns');
+    }
+
+    wp_send_json_success(is_array($status) ? $status : array());
+}
+add_action('wp_ajax_patternswp_warm_library', 'patternswp_warm_library_handler');
+
+/**
+ * Warm the library after install or plugin update.
+ */
+function patternswp_maybe_upgrade_library() {
+    if (!is_admin()) {
+        return;
+    }
+
+    $installed = get_option('patternswp_installed_version', '');
+    if ($installed === PWP_P_VERSION) {
+        return;
+    }
+
+    update_option('patternswp_installed_version', PWP_P_VERSION, false);
+    PatternsWP_API_Section::get_instance()->maybe_schedule_warm();
+}
+add_action('admin_init', 'patternswp_maybe_upgrade_library', 5);
 
 /**
  * Add plugin action links.
@@ -255,3 +324,16 @@ function patternswp_add_plugin_meta_links($links, $file) {
     return $links;
 }
 add_filter('plugin_row_meta', 'patternswp_add_plugin_meta_links', 10, 2);
+
+/**
+ * Let long catalog AJAX run without blocking other editor requests.
+ */
+function patternswp_release_ajax_lock() {
+    if ( function_exists( 'session_status' ) && PHP_SESSION_ACTIVE === session_status() ) {
+        session_write_close();
+        return;
+    }
+    if ( session_id() ) {
+        session_write_close();
+    }
+}

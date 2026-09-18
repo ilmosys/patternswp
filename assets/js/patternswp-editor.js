@@ -199,8 +199,8 @@
 			check: uicon(
 				'M18.3534546,7.5735474c-0.1932983-0.1972046-0.5098267-0.2003784-0.7070312-0.0070801l-7.8066406,7.8066406l-3.4863281-3.4863281c-0.194397-0.1905518-0.5054321-0.1905518-0.6998291,0c-0.1972046,0.1932373-0.2003784,0.5097656-0.0071411,0.7069702l3.8398438,3.8398438c0.0936279,0.0939331,0.2208862,0.1466675,0.3535156,0.1464844c0.1326294,0.0001221,0.2598267-0.0526123,0.3534546-0.1464844l8.1601562-8.1601562C18.5440063,8.0790405,18.5440063,7.7679443,18.3534546,7.5735474z'
 			),
-			search: uicon(
-				'M24,22.586l-6.262-6.262a10.016,10.016,0,1,0-1.414,1.414L22.586,24ZM10,18a8,8,0,1,1,8-8A8.009,8.009,0,0,1,10,18Z'
+			refresh: uicon(
+				'M12,2A10,10,0,0,0,4.93,4.93,1,1,0,0,0,6.34,6.34,8,8,0,1,1,4,12H7L3,8,0,12H2A10,10,0,1,0,12,2Z'
 			),
 			plusBox: uicon(
 				'M9,13h2v2a1,1,0,0,0,2,0V13h2a1,1,0,0,0,0-2H13V9a1,1,0,0,0-2,0v2H9a1,1,0,0,0,0,2ZM21,2H3A1,1,0,0,0,2,3V21a1,1,0,0,0,1,1H21a1,1,0,0,0,1-1V3A1,1,0,0,0,21,2ZM20,20H4V4H20Z'
@@ -263,6 +263,8 @@
 	var MAX_FAVORITES = 40;
 	var MAX_RECENT = 24;
 
+	var PAGE_SIZE = 20;
+
 	var DEFAULT_PREFS = {
 		layout: 'grid',
 		viewport: 'desktop',
@@ -270,7 +272,6 @@
 		sortOrder: 'asc',
 		typeFilter: 'all',
 		previewSize: 2,
-		perPage: 20,
 		showTitle: true,
 		showPreview: true,
 	};
@@ -323,7 +324,53 @@
 			isLicenseActive: false,
 			patternCategories: [],
 			patternsNonce: '',
+			libraryComplete: false,
+			ajaxUrl: window.ajaxurl || '',
 		};
+	}
+
+	function ajaxUrl() {
+		var boot = getBoot();
+		return boot.ajaxUrl || window.ajaxurl || '';
+	}
+
+	function parseAjaxJson( response ) {
+		return response.text().then( function ( text ) {
+			var json = null;
+			try {
+				json = text ? JSON.parse( text ) : null;
+			} catch ( e ) {
+				json = null;
+			}
+			if ( ! json ) {
+				throw new Error( 'invalid' );
+			}
+			return json;
+		} );
+	}
+
+	function normalizeLibraryPayload( json ) {
+		if ( ! json || ! json.success ) {
+			throw new Error( 'invalid' );
+		}
+		var data = json.data;
+		if ( Array.isArray( data ) ) {
+			return {
+				patterns: data,
+				total: data.length,
+				complete: true,
+				categories: null,
+			};
+		}
+		if ( data && Array.isArray( data.patterns ) ) {
+			return {
+				patterns: data.patterns,
+				total: typeof data.total === 'number' ? data.total : data.patterns.length,
+				complete: !! data.complete,
+				categories: Array.isArray( data.categories ) ? data.categories : null,
+			};
+		}
+		throw new Error( 'invalid' );
 	}
 
 	function patternKey( pattern ) {
@@ -445,11 +492,14 @@
 	/* Data fetching                                                      */
 	/* ------------------------------------------------------------------ */
 
-	function fetchPatternsPage( page, search, category, perPage, signal ) {
-		var pageSize = perPage || DEFAULT_PREFS.perPage;
+	function fetchPatternsPage( page, search, category, perPage, signal, retries ) {
+		var pageSize = perPage || PAGE_SIZE;
 		var key = cacheKey( category, search, page, pageSize );
 		if ( pageCache.has( key ) ) {
 			return Promise.resolve( pageCache.get( key ) );
+		}
+		if ( typeof retries !== 'number' ) {
+			retries = 1;
 		}
 
 		var boot = getBoot();
@@ -463,7 +513,7 @@
 		} );
 
 		return window
-			.fetch( window.ajaxurl, {
+			.fetch( ajaxUrl(), {
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: {
@@ -472,19 +522,59 @@
 				body: body.toString(),
 				signal: signal,
 			} )
-			.then( function ( response ) {
-				var type = response.headers.get( 'Content-Type' ) || '';
-				if ( type.indexOf( 'text/html' ) !== -1 ) {
-					throw new Error( 'html' );
-				}
-				return response.json();
-			} )
+			.then( parseAjaxJson )
 			.then( function ( json ) {
-				if ( ! json || ! json.success || ! Array.isArray( json.data ) ) {
+				var payload = normalizeLibraryPayload( json );
+				if ( payload.patterns.length || payload.complete ) {
+					pageCache.set( key, payload );
+				}
+				return payload;
+			} )
+			.catch( function ( err ) {
+				if ( err && err.name === 'AbortError' ) {
+					throw err;
+				}
+				if ( retries > 0 ) {
+					return new Promise( function ( resolve ) {
+						window.setTimeout( resolve, 1200 );
+					} ).then( function () {
+						return fetchPatternsPage( page, search, category, perPage, signal, retries - 1 );
+					} );
+				}
+				throw err;
+			} );
+	}
+
+	function warmLibrary( signal, mode, force ) {
+		var boot = getBoot();
+		var body = new window.URLSearchParams( {
+			action: 'patternswp_warm_library',
+			nonce: boot.patternsNonce || '',
+			mode: mode || 'sync',
+			force: force ? '1' : '0',
+		} );
+
+		return window
+			.fetch( ajaxUrl(), {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: {
+					'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+				},
+				body: body.toString(),
+				signal: signal,
+			} )
+			.then( parseAjaxJson )
+			.then( function ( json ) {
+				if ( ! json || ! json.success || ! json.data || typeof json.data !== 'object' ) {
 					throw new Error( 'invalid' );
 				}
-				pageCache.set( key, json.data );
-				return json.data;
+				return {
+					total: typeof json.data.total === 'number' ? json.data.total : 0,
+					complete: !! json.data.complete,
+					categories: Array.isArray( json.data.categories ) ? json.data.categories : null,
+					hasUpdates: !! json.data.has_updates,
+				};
 			} );
 	}
 
@@ -976,7 +1066,6 @@
 		var sortField = props.sortField;
 		var sortOrder = props.sortOrder;
 		var previewSize = props.previewSize;
-		var perPage = props.perPage;
 		var showTitle = props.showTitle;
 		var showPreview = props.showPreview;
 
@@ -1068,24 +1157,6 @@
 					value: previewSize,
 					onChange: props.onPreviewSizeChange,
 				} )
-			),
-			el(
-				'div',
-				{ className: 'patternswp-appearance__section' },
-				el( 'span', { className: 'patternswp-appearance__label' }, __( 'Items per page', 'patternswp' ) ),
-				el(
-					ButtonGroup,
-					{ className: 'patternswp-appearance__per-page' },
-					[ 10, 20, 50, 100 ].map( function ( n ) {
-						return el( Button, {
-							key: n,
-							isPressed: perPage === n,
-							onClick: function () {
-								props.onPerPageChange( n );
-							},
-						}, String( n ) );
-					} )
-				)
 			),
 			el(
 				'div',
@@ -1405,20 +1476,37 @@
 		var boot = getBoot();
 		var isLicenseActive = !! boot.isLicenseActive;
 
-		var categories = useMemo(
-			function () {
-				var list = Array.isArray( boot.patternCategories ) ? boot.patternCategories : [];
-				return list
-					.filter( function ( cat ) {
-						return cat && cat.name;
-					} )
-					.slice()
-					.sort( function ( a, b ) {
-						return formatCategoryLabel( a.name ).localeCompare( formatCategoryLabel( b.name ) );
-					} );
-			},
-			[ boot.patternCategories ]
-		);
+		var remoteCategoriesState = useState( function () {
+			var list = Array.isArray( boot.patternCategories ) ? boot.patternCategories : [];
+			return list
+				.filter( function ( cat ) {
+					return cat && cat.name;
+				} )
+				.slice()
+				.sort( function ( a, b ) {
+					return formatCategoryLabel( a.name ).localeCompare( formatCategoryLabel( b.name ) );
+				} );
+		} );
+		var categories = remoteCategoriesState[ 0 ];
+		var setRemoteCategories = remoteCategoriesState[ 1 ];
+
+		var libraryCompleteState = useState( !! boot.libraryComplete );
+		var libraryComplete = libraryCompleteState[ 0 ];
+		var setLibraryComplete = libraryCompleteState[ 1 ];
+
+		var libraryTotalState = useState( 0 );
+		var libraryTotal = libraryTotalState[ 0 ];
+		var setLibraryTotal = libraryTotalState[ 1 ];
+
+		var syncingState = useState( false );
+		var syncing = syncingState[ 0 ];
+		var setSyncing = syncingState[ 1 ];
+
+		var gridReadyState = useState( false );
+		var gridReady = gridReadyState[ 0 ];
+		var setGridReady = gridReadyState[ 1 ];
+
+		var syncRequestRef = useRef( 0 );
 
 		var prefs = Object.assign( {}, DEFAULT_PREFS, readStore( PREFS_KEY, {} ) );
 
@@ -1458,10 +1546,6 @@
 		var previewSizeState = useState( prefs.previewSize || 2 );
 		var previewSize = previewSizeState[ 0 ];
 		var setPreviewSize = previewSizeState[ 1 ];
-
-		var perPageState = useState( prefs.perPage || 20 );
-		var perPage = perPageState[ 0 ];
-		var setPerPage = perPageState[ 1 ];
 
 		var showTitleState = useState( prefs.showTitle !== false );
 		var showTitle = showTitleState[ 0 ];
@@ -1527,6 +1611,7 @@
 		var sentinelRef = useRef( null );
 		var abortRef = useRef( null );
 		var requestIdRef = useRef( 0 );
+		var firstPageReadyRef = useRef( false );
 
 		useEffect(
 			function () {
@@ -1544,7 +1629,6 @@
 					sortOrder: sortOrder,
 					typeFilter: typeFilter,
 					previewSize: previewSize,
-					perPage: perPage,
 					showTitle: showTitle,
 					showPreview: showPreview,
 				} );
@@ -1556,7 +1640,6 @@
 				sortOrder,
 				typeFilter,
 				previewSize,
-				perPage,
 				showTitle,
 				showPreview,
 			]
@@ -1616,17 +1699,39 @@
 					nextPage,
 					debouncedSearch,
 					category === SPECIAL.ALL ? '' : category,
-					perPage,
+					PAGE_SIZE,
 					controller && controller.signal
 				)
-					.then( function ( data ) {
+					.then( function ( payload ) {
 						if ( requestId !== requestIdRef.current ) {
 							return;
 						}
-						setHasMore( data.length >= perPage );
+						var data = payload && Array.isArray( payload.patterns ) ? payload.patterns : [];
+						var complete = !!( payload && payload.complete );
+						var total = payload && typeof payload.total === 'number' ? payload.total : 0;
+						if ( payload && payload.categories && payload.categories.length ) {
+							setRemoteCategories(
+								payload.categories
+									.filter( function ( cat ) {
+										return cat && cat.name;
+									} )
+									.slice()
+									.sort( function ( a, b ) {
+										return formatCategoryLabel( a.name ).localeCompare(
+											formatCategoryLabel( b.name )
+										);
+									} )
+							);
+						}
+						setLibraryComplete( complete );
+						if ( total ) {
+							setLibraryTotal( total );
+						}
 						setPage( nextPage );
 						setPatterns( function ( prev ) {
-							return replace ? data : upsertByKey( prev, data );
+							var next = replace ? data : upsertByKey( prev, data );
+							setHasMore( next.length < total || ( ! complete && data.length >= PAGE_SIZE ) );
+							return next;
 						} );
 					} )
 					.catch( function ( err ) {
@@ -1650,9 +1755,13 @@
 						}
 						setLoading( false );
 						setLoadingMore( false );
+						if ( ! firstPageReadyRef.current ) {
+							firstPageReadyRef.current = true;
+							setGridReady( true );
+						}
 					} );
 			},
-			[ category, debouncedSearch, isLocalCollection, perPage ]
+			[ category, debouncedSearch, isLocalCollection ]
 		);
 
 		/* Local collections (favorites / recent) — no AJAX */
@@ -1696,10 +1805,144 @@
 					}
 				};
 			},
-			[ category, debouncedSearch, isLocalCollection, loadPage, perPage ]
+			[ category, debouncedSearch, isLocalCollection, loadPage ]
 		);
 
-		/* Infinite scroll via IntersectionObserver on sentinel */
+		/* Fill the rest of the catalog after the first page is on screen. */
+		useEffect(
+			function () {
+				if ( ! gridReady ) {
+					return;
+				}
+
+				var stopped = false;
+				var timer = 0;
+				var tries = 0;
+				var requestId = ++syncRequestRef.current;
+
+				function applyStatus( status ) {
+					if ( status.categories && status.categories.length ) {
+						setRemoteCategories(
+							status.categories
+								.filter( function ( cat ) {
+									return cat && cat.name;
+								} )
+								.slice()
+								.sort( function ( a, b ) {
+									return formatCategoryLabel( a.name ).localeCompare(
+										formatCategoryLabel( b.name )
+									);
+								} )
+						);
+					}
+					if ( typeof status.total === 'number' ) {
+						setLibraryTotal( status.total );
+					}
+					setLibraryComplete( !! status.complete );
+					if ( ! status.complete ) {
+						setHasMore( true );
+					}
+				}
+
+				function tick( mode ) {
+					if ( stopped || requestId !== syncRequestRef.current || tries > 40 ) {
+						setSyncing( false );
+						return;
+					}
+					tries += 1;
+					setSyncing( true );
+					warmLibrary( null, mode )
+						.then( function ( status ) {
+							if ( stopped || requestId !== syncRequestRef.current ) {
+								return;
+							}
+							applyStatus( status );
+							if ( status.complete && ( mode === 'check' ? ! status.hasUpdates : true ) ) {
+								setSyncing( false );
+								return;
+							}
+							timer = window.setTimeout( function () {
+								tick( 'sync' );
+							}, 600 );
+						} )
+						.catch( function ( err ) {
+							if ( err && err.name === 'AbortError' ) {
+								return;
+							}
+							if ( ! stopped && requestId === syncRequestRef.current ) {
+								timer = window.setTimeout( function () {
+									tick( 'sync' );
+								}, 2000 );
+							}
+						} );
+				}
+
+				tick( boot.libraryComplete ? 'check' : 'sync' );
+
+				return function () {
+					stopped = true;
+					window.clearTimeout( timer );
+				};
+			},
+			[ gridReady ]
+		);
+
+		function onSyncClick() {
+			syncRequestRef.current += 1;
+			var requestId = syncRequestRef.current;
+			setSyncing( true );
+
+			function applyStatus( status ) {
+				if ( status.categories && status.categories.length ) {
+					setRemoteCategories(
+						status.categories
+							.filter( function ( cat ) {
+								return cat && cat.name;
+							} )
+							.slice()
+							.sort( function ( a, b ) {
+								return formatCategoryLabel( a.name ).localeCompare(
+									formatCategoryLabel( b.name )
+								);
+							} )
+					);
+				}
+				if ( typeof status.total === 'number' ) {
+					setLibraryTotal( status.total );
+				}
+				setLibraryComplete( !! status.complete );
+				if ( ! status.complete || status.hasUpdates ) {
+					setHasMore( true );
+				}
+			}
+
+			function tick( mode ) {
+				if ( requestId !== syncRequestRef.current ) {
+					return;
+				}
+				warmLibrary( null, mode, true )
+					.then( function ( status ) {
+						if ( requestId !== syncRequestRef.current ) {
+							return;
+						}
+						applyStatus( status );
+						if ( status.complete && ! status.hasUpdates ) {
+							setSyncing( false );
+							return;
+						}
+						window.setTimeout( function () {
+							tick( 'sync' );
+						}, 500 );
+					} )
+					.catch( function () {
+						if ( requestId === syncRequestRef.current ) {
+							setSyncing( false );
+						}
+					} );
+			}
+
+			tick( 'check' );
+		}
 		useEffect(
 			function () {
 				var sentinel = sentinelRef.current;
@@ -1750,7 +1993,6 @@
 			setSortField( DEFAULT_PREFS.sortField );
 			setSortOrder( DEFAULT_PREFS.sortOrder );
 			setPreviewSize( DEFAULT_PREFS.previewSize );
-			setPerPage( DEFAULT_PREFS.perPage );
 			setShowTitle( DEFAULT_PREFS.showTitle );
 			setShowPreview( DEFAULT_PREFS.showPreview );
 			setLayout( DEFAULT_PREFS.layout );
@@ -1878,8 +2120,40 @@
 			previewSize;
 
 		return el(
-			Fragment,
-			null,
+			Modal,
+			{
+				title: __( 'PatternsWP Patterns', 'patternswp' ),
+				className: 'patternswp-modal',
+				onRequestClose: onRequestClose,
+				isFullScreen: true,
+				shouldCloseOnClickOutside: false,
+				headerActions: el(
+					Button,
+					{
+						className: 'patternswp-library-sync' + ( syncing ? ' is-busy' : '' ),
+						icon: syncing
+							? el( Spinner )
+							: iconOrDash( icons.refresh, 'update' ),
+						label: syncing
+							? __( 'Updating the pattern library', 'patternswp' )
+							: libraryComplete
+								? __( 'Check for new patterns', 'patternswp' )
+								: __( 'Load remaining patterns', 'patternswp' ),
+						showTooltip: true,
+						onClick: onSyncClick,
+						disabled: syncing,
+					},
+					syncing
+						? ( libraryTotal
+							? sprintf(
+									/* translators: %d: number of cached patterns */
+									__( '%d', 'patternswp' ),
+									libraryTotal
+							  )
+							: __( 'Syncing', 'patternswp' ) )
+						: __( 'Sync', 'patternswp' )
+				),
+			},
 			el(
 				'div',
 				{ className: 'patternswp-layout' },
@@ -2119,13 +2393,11 @@
 												sortField: sortField,
 												sortOrder: sortOrder,
 												previewSize: previewSize,
-												perPage: perPage,
 												showTitle: showTitle,
 												showPreview: showPreview,
 												onSortFieldChange: setSortField,
 												onSortOrderChange: setSortOrder,
 												onPreviewSizeChange: setPreviewSize,
-												onPerPageChange: setPerPage,
 												onShowTitleChange: setShowTitle,
 												onShowPreviewChange: setShowPreview,
 												onReset: resetAppearance,
@@ -2198,7 +2470,9 @@
 										null,
 										debouncedSearch
 											? __( 'No search results found.', 'patternswp' )
-											: __( 'No patterns were found.', 'patternswp' )
+											: libraryComplete
+												? __( 'No patterns were found.', 'patternswp' )
+												: __( 'Loading the pattern library…', 'patternswp' )
 									)
 							  )
 							: null,
@@ -2246,17 +2520,7 @@
 		if ( ! props.isOpen ) {
 			return null;
 		}
-		return el(
-			Modal,
-			{
-				title: __( 'PatternsWP Patterns', 'patternswp' ),
-				className: 'patternswp-modal',
-				onRequestClose: props.onRequestClose,
-				isFullScreen: true,
-				shouldCloseOnClickOutside: false,
-			},
-			el( PatternsLibrary, { onRequestClose: props.onRequestClose } )
-		);
+		return el( PatternsLibrary, { onRequestClose: props.onRequestClose } );
 	}
 
 	/* ------------------------------------------------------------------ */
@@ -2333,8 +2597,9 @@
 					undefined,
 					controller ? controller.signal : undefined
 				)
-					.then( function ( data ) {
-						setResults( Array.isArray( data ) ? data.slice( 0, 8 ) : [] );
+					.then( function ( payload ) {
+						var data = payload && Array.isArray( payload.patterns ) ? payload.patterns : [];
+						setResults( data.slice( 0, 8 ) );
 						setLoading( false );
 					} )
 					.catch( function ( err ) {

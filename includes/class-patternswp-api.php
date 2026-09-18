@@ -32,6 +32,7 @@ class PatternsWP_API_Section {
     private function __construct() {
         add_action( 'admin_init', array( $this, 'register_patterns_endpoint') );
         add_action( 'patternswp_daily_transient_load', array( $this, 'patternswp_save_transient_if_not_ajax' ) );
+        add_action( 'patternswp_library_warm', array( $this, 'warm_library' ) );
 
         $this->api_url = 'https://pwp4.thepatternswp.com/';
     }
@@ -74,18 +75,67 @@ class PatternsWP_API_Section {
         $search     = is_string( $search ) ? $search : '';
         $category   = is_string( $category ) ? $category : '';
 
-        $patterns = $this->get_library( true );
+        $patterns = $this->get_library( false );
+        if ( empty( $patterns ) ) {
+            $this->schedule_library_refresh();
+            $seeded = $this->seed_library_for_request( $page, $p_per_page, $search, $category );
+            $seeded = $this->filter_patterns_by_category( $seeded, $category );
+            $seeded = $this->filter_patterns_by_search( $seeded, $search );
+            $seeded = apply_filters( 'patternswp_patterns', $seeded );
+            $seeded = $this->normalize_patterns_list( $seeded );
+
+            if ( '' === $search ) {
+                return array_values( array_slice( $seeded, 0, $p_per_page ) );
+            }
+
+            $offset = ( $page - 1 ) * $p_per_page;
+            return array_values( array_slice( $seeded, $offset, $p_per_page ) );
+        } elseif ( '' !== $category && ! $this->is_library_complete() ) {
+            $in_category = $this->filter_patterns_by_category( $patterns, $category );
+            if ( empty( $in_category ) ) {
+                $this->schedule_library_refresh();
+                $extra = $this->fetch_paginated_page( 1, 20, $category );
+                if ( ! empty( $extra ) ) {
+                    $patterns = $this->merge_pattern_libraries( $extra, $patterns );
+                    $this->store_library_cache( $this->get_library_scope(), $patterns );
+                    $this->library_runtime[ $this->get_library_scope() ] = $patterns;
+                }
+            }
+        }
+
         if ( empty( $patterns ) ) {
             return array();
         }
 
-        $patterns = $this->filter_patterns_by_category( $patterns, $category );
-        $patterns = $this->filter_patterns_by_search( $patterns, $search );
-        $patterns = apply_filters( 'patternswp_patterns', $patterns );
-        $patterns = $this->normalize_patterns_list( $patterns );
+        $filtered = $this->filter_patterns_by_category( $patterns, $category );
+        $filtered = $this->filter_patterns_by_search( $filtered, $search );
+        $filtered = apply_filters( 'patternswp_patterns', $filtered );
+        $filtered = $this->normalize_patterns_list( $filtered );
 
         $offset = ( $page - 1 ) * $p_per_page;
-        return array_values( array_slice( $patterns, $offset, $p_per_page ) );
+        $slice  = array_values( array_slice( $filtered, $offset, $p_per_page ) );
+
+        if ( empty( $slice ) && ! $this->is_library_complete() && '' === $search ) {
+            $this->schedule_library_refresh();
+            $remote = $this->fetch_paginated_page( $page, min( 20, max( 15, $p_per_page ) ), $category );
+            if ( ! empty( $remote ) ) {
+                $scope    = $this->get_library_scope();
+                $patterns = $this->merge_pattern_libraries( $remote, $patterns );
+                $this->store_library_cache( $scope, $patterns );
+                $this->library_runtime[ $scope ] = $patterns;
+
+                $filtered = $this->filter_patterns_by_category( $patterns, $category );
+                $filtered = apply_filters( 'patternswp_patterns', $filtered );
+                $filtered = $this->normalize_patterns_list( $filtered );
+                $slice    = array_values( array_slice( $filtered, $offset, $p_per_page ) );
+
+                if ( empty( $slice ) ) {
+                    return array_values( array_slice( $remote, 0, $p_per_page ) );
+                }
+            }
+        }
+
+        return $slice;
     }
 
     /**
@@ -96,21 +146,22 @@ class PatternsWP_API_Section {
         $categories    = get_transient( $transient_key );
 
         if ( false === $categories ) {
-            $categories_response = wp_remote_get(
-                $this->api_url . 'wp-json/patternswp_pattens_category_types/v1/patterns',
-                array( 'timeout' => 8 )
-            );
+            if ( ! wp_doing_ajax() && ! wp_doing_cron() ) {
+                $this->schedule_library_refresh();
+                $categories = $this->get_fallback_categories();
+            } else {
+                $categories = $this->remote_get_json(
+                    $this->api_url . 'wp-json/patternswp_pattens_category_types/v1/patterns',
+                    8
+                );
 
-            if ( is_wp_error( $categories_response ) ) {
-                return array();
+                if ( ! is_array( $categories ) || empty( $categories ) ) {
+                    $this->schedule_library_refresh();
+                    return $this->get_fallback_categories();
+                }
+
+                set_transient( $transient_key, $categories, DAY_IN_SECONDS );
             }
-
-            $categories = json_decode( wp_remote_retrieve_body( $categories_response ), true );
-            if ( ! is_array( $categories ) || empty( $categories ) ) {
-                return array();
-            }
-
-            set_transient( $transient_key, $categories, DAY_IN_SECONDS );
         }
 
         if ( $manually && is_array( $categories ) ) {
@@ -165,10 +216,20 @@ class PatternsWP_API_Section {
     }
 
     /**
-     * Daily / manual cache warm.
+     * Daily cache warm (forced).
      */
     public function patternswp_save_transient_if_not_ajax() {
-        $this->patternswp_save_transient_wise_category();
+        $this->refresh_library( true );
+        $this->get_patternswp_category_type( false );
+        update_option( 'patternswp_lib_checked_at', time(), false );
+    }
+
+    /**
+     * Resume a time-budgeted library download.
+     */
+    public function warm_library() {
+        $this->refresh_library( false, wp_doing_ajax() ? 10 : 18 );
+        $this->get_patternswp_category_type( false );
     }
 
     /**
@@ -177,6 +238,172 @@ class PatternsWP_API_Section {
     public function patternswp_save_transient_wise_category() {
         $this->refresh_library( true );
         $this->get_patternswp_category_type( false );
+    }
+
+    /**
+     * Drop cached catalogs and queue a background refill.
+     */
+    public function purge_library_caches() {
+        $this->delete_library_cache( 'free' );
+        $this->delete_library_cache( 'pro' );
+        $this->delete_legacy_pattern_cache();
+        $this->delete_library_file( 'free' );
+        $this->delete_library_file( 'pro' );
+        delete_transient( 'patternswp_category_type' );
+        delete_transient( 'patternswp_library_lock' );
+        delete_option( 'patternswp_lib_state' );
+        delete_option( 'patternswp_lib_checked_at' );
+        $this->library_runtime = array();
+    }
+
+    /**
+     * Queue WP-Cron to finish downloading the catalog without blocking admin AJAX.
+     *
+     * @param int $delay Seconds to wait before the first warm run.
+     */
+    public function schedule_library_refresh( $delay = 1 ) {
+        $hook = 'patternswp_library_warm';
+        if ( ! wp_next_scheduled( $hook ) ) {
+            wp_schedule_single_event( time() + max( 0, (int) $delay ), $hook );
+            if ( ! defined( 'DISABLE_WP_CRON' ) || ! DISABLE_WP_CRON ) {
+                spawn_cron();
+            }
+        }
+
+        if ( ! wp_next_scheduled( 'patternswp_daily_transient_load' ) ) {
+            wp_schedule_event( time() + DAY_IN_SECONDS, 'daily', 'patternswp_daily_transient_load' );
+        }
+    }
+
+    /**
+     * Start a background download when this site has no catalog yet.
+     */
+    public function maybe_schedule_warm() {
+        if ( empty( $this->get_library( false ) ) || ! $this->is_library_complete() ) {
+            $this->schedule_library_refresh( 1 );
+        }
+    }
+
+    /**
+     * Whether the cached catalog is complete enough to serve locally.
+     *
+     * @return bool
+     */
+    public function is_catalog_ready() {
+        return $this->is_library_complete();
+    }
+
+    /**
+     * Progress payload for the editor warmer.
+     *
+     * @param bool $has_updates Whether new remote patterns were merged.
+     * @return array
+     */
+    public function get_library_status( $has_updates = false ) {
+        $patterns = $this->get_library( false );
+
+        return array(
+            'total'      => count( $patterns ),
+            'complete'   => $this->is_library_complete(),
+            'categories' => $this->get_patternswp_category_type( false ),
+            'has_updates' => (bool) $has_updates,
+        );
+    }
+
+    /**
+     * Cheap check for newly published remote patterns.
+     *
+     * @param bool $force Ignore the 6-hour throttle.
+     * @return array
+     */
+    public function maybe_pull_remote_updates( $force = false ) {
+        $last     = (int) get_option( 'patternswp_lib_checked_at', 0 );
+        $complete = $this->is_library_complete();
+
+        if ( ! $force && $complete && $last && ( time() - $last ) < ( 6 * HOUR_IN_SECONDS ) ) {
+            return $this->get_library_status();
+        }
+
+        $before = count( $this->get_library( false ) );
+        $batch  = $this->fetch_paginated_page( 1, 20, '' );
+        update_option( 'patternswp_lib_checked_at', time(), false );
+
+        $has_updates = false;
+        if ( ! empty( $batch ) ) {
+            $scope  = $this->get_library_scope();
+            $merged = $this->merge_pattern_libraries( $batch, $this->get_library( false ) );
+            $this->store_library_cache( $scope, $merged );
+            $this->library_runtime[ $scope ] = $merged;
+
+            if ( count( $merged ) > $before ) {
+                $has_updates = true;
+                $state                 = $this->get_refresh_state();
+                $state['complete']     = false;
+                $state['phase']        = 'paginated';
+                $state['empty_streak'] = 0;
+                $per                   = max( 1, (int) $state['per_page'] );
+                $state['page']         = max( 2, (int) ceil( count( $merged ) / $per ) );
+                $this->set_refresh_state( $state );
+            }
+        }
+
+        if ( $force || false === get_transient( 'patternswp_category_type' ) ) {
+            delete_transient( 'patternswp_category_type' );
+            $this->get_patternswp_category_type( false );
+        }
+
+        return $this->get_library_status( $has_updates );
+    }
+
+    /**
+     * One short catalog burst for editor AJAX. Safe on hosts with 30s limits.
+     *
+     * @return array
+     */
+    public function warm_library_for_request() {
+        $this->refresh_library( false, 8 );
+        $this->get_patternswp_category_type( false );
+        return $this->get_library_status();
+    }
+
+    /**
+     * Paged library payload for the modal.
+     *
+     * @param int    $page       Page number.
+     * @param int    $p_per_page Patterns per page.
+     * @param string $search     Search query.
+     * @param string $category   Category slug.
+     * @return array
+     */
+    public function query_library_page( $page = 1, $p_per_page = 15, $search = '', $category = '' ) {
+        $items = $this->get_patternswp_pattern( $page, $p_per_page, $search, $category );
+
+        $all      = $this->get_library( false );
+        $filtered = $this->filter_patterns_by_category( $all, $category );
+        $filtered = $this->filter_patterns_by_search( $filtered, $search );
+        $filtered = apply_filters( 'patternswp_patterns', $filtered );
+        $filtered = $this->normalize_patterns_list( $filtered );
+
+        return array(
+            'patterns'   => is_array( $items ) ? array_values( $items ) : array(),
+            'total'      => count( $filtered ),
+            'complete'   => $this->is_library_complete(),
+            'categories' => $this->get_cached_categories(),
+        );
+    }
+
+    /**
+     * Categories for the modal without a blocking remote request.
+     *
+     * @return array
+     */
+    private function get_cached_categories() {
+        $categories = get_transient( 'patternswp_category_type' );
+        if ( is_array( $categories ) && ! empty( $categories ) ) {
+            return $categories;
+        }
+
+        return $this->get_fallback_categories();
     }
 
     /**
@@ -208,16 +435,51 @@ class PatternsWP_API_Section {
     }
 
     /**
-     * Fetch and store the full pattern catalog once for this site.
+     * Fetch one remote page so the modal can render on a cold cache.
+     * Full catalog download continues in WP-Cron so hosts do not kill AJAX.
      *
-     * @param bool $force Bypass the in-flight lock wait when cron already owns the job.
+     * @param int    $page       Requested page.
+     * @param int    $p_per_page Page size.
+     * @param string $search     Search query.
+     * @param string $category   Category slug.
      * @return array
      */
-    private function refresh_library( $force = false ) {
+    private function seed_library_for_request( $page, $p_per_page, $search, $category ) {
+        $scope    = $this->get_library_scope();
+        $per_page = min( 20, max( 15, (int) $p_per_page ) );
+        $remote_page = ( '' === $search ) ? max( 1, (int) $page ) : 1;
+
+        $batch = $this->fetch_paginated_page( $remote_page, $per_page, $category );
+        if ( empty( $batch ) && $per_page !== 15 ) {
+            $batch = $this->fetch_paginated_page( $remote_page, 15, $category );
+        }
+
+        if ( ! empty( $batch ) ) {
+            $existing = $this->read_library_cache( $scope );
+            $merged   = $this->merge_pattern_libraries( $batch, is_array( $existing ) ? $existing : array() );
+            $this->store_library_cache( $scope, $merged );
+            $this->library_runtime[ $scope ] = $merged;
+            return $merged;
+        }
+
+        return array();
+    }
+
+    /**
+     * Fetch and store the catalog in short, resumable bursts.
+     *
+     * Hosts commonly kill 30–60s AJAX with an HTML error page. Saving after
+     * each page keeps the library usable if PHP is stopped mid-run.
+     *
+     * @param bool $force  Restart from page 1.
+     * @param int  $budget Seconds to spend, or 0 for the default.
+     * @return array
+     */
+    private function refresh_library( $force = false, $budget = 0 ) {
         $scope = $this->get_library_scope();
         $lock  = 'patternswp_library_lock';
 
-        if ( ! $force ) {
+        if ( ! $force && $this->is_library_complete() ) {
             $cached = $this->read_library_cache( $scope );
             if ( ! empty( $cached ) ) {
                 return $cached;
@@ -225,30 +487,122 @@ class PatternsWP_API_Section {
         }
 
         if ( ! $this->acquire_refresh_lock( $lock ) ) {
-            $waited = $this->wait_for_library_cache( $scope, 8 );
+            if ( wp_doing_ajax() && ! $force ) {
+                $this->schedule_library_refresh( 2 );
+                return $this->read_library_cache( $scope );
+            }
+
+            $waited = $this->wait_for_library_cache( $scope, wp_doing_ajax() ? 2 : 6 );
             if ( ! empty( $waited ) && ! $force ) {
                 return $waited;
             }
             if ( ! $force ) {
-                return array();
+                $this->schedule_library_refresh( 3 );
+                return $this->read_library_cache( $scope );
             }
-            set_transient( $lock, 1, MINUTE_IN_SECONDS );
+            set_transient( $lock, 1, 5 * MINUTE_IN_SECONDS );
         }
 
-        $existing = $this->read_library_cache( $scope );
-        $existing = $this->backfill_missing_categories( $existing );
-        $fetched  = $this->fetch_full_catalog();
-        $patterns = $this->merge_pattern_libraries( $fetched, $existing );
-        $patterns = $this->backfill_missing_categories( $patterns );
+        if ( function_exists( 'ignore_user_abort' ) ) {
+            ignore_user_abort( true );
+        }
 
-        if ( ! empty( $patterns ) ) {
+        $deadline = time() + ( $budget > 0 ? (int) $budget : ( wp_doing_ajax() ? 10 : 18 ) );
+        $state    = $force ? $this->default_refresh_state() : $this->get_refresh_state();
+        $patterns = $this->read_library_cache( $scope );
+
+        if ( count( $patterns ) < 200 ) {
+            $state['complete'] = false;
+            if ( in_array( $state['phase'], array( 'done', 'bulk' ), true ) ) {
+                $state['phase'] = 'paginated';
+            }
+            $per = (int) $state['per_page'];
+            if ( $per > 0 && count( $patterns ) > 0 ) {
+                $state['page'] = max( (int) $state['page'], (int) ceil( count( $patterns ) / $per ) + 1 );
+            }
+        }
+
+        if ( empty( $state['per_page'] ) ) {
+            foreach ( array( 20, 15 ) as $size ) {
+                $first = $this->fetch_paginated_page( 1, $size, '' );
+                if ( ! empty( $first ) ) {
+                    $state['per_page'] = $size;
+                    $state['page']     = 2;
+                    $patterns          = $this->merge_pattern_libraries( $first, $patterns );
+                    $this->store_library_cache( $scope, $patterns );
+                    break;
+                }
+            }
+            if ( empty( $state['per_page'] ) ) {
+                delete_transient( $lock );
+                $this->schedule_library_refresh( 30 );
+                return $patterns;
+            }
+        }
+
+        while ( 'paginated' === $state['phase'] && time() < $deadline && $state['page'] <= 50 ) {
+            $batch = $this->fetch_paginated_page( (int) $state['page'], (int) $state['per_page'], '' );
+            if ( empty( $batch ) ) {
+                $state['empty_streak'] = (int) $state['empty_streak'] + 1;
+                /*
+                 * Empty responses are usually timeouts/token misses, not EOF.
+                 * Only leave pagination after several failures AND a sizable catalog.
+                 */
+                if ( $state['empty_streak'] >= 5 && count( $patterns ) >= 200 ) {
+                    $state['phase'] = 'backfill';
+                    $this->set_refresh_state( $state );
+                    break;
+                }
+                $this->set_refresh_state( $state );
+                break;
+            }
+
+            $state['empty_streak'] = 0;
+            $patterns              = $this->merge_pattern_libraries( $batch, $patterns );
             $this->store_library_cache( $scope, $patterns );
-            $this->library_runtime[ $scope ] = $patterns;
-        } else {
-            $patterns = $existing;
+
+            if ( count( $batch ) < (int) $state['per_page'] ) {
+                $state['phase'] = 'backfill';
+                break;
+            }
+
+            $state['page']++;
+            $this->set_refresh_state( $state );
         }
 
+        if ( 'paginated' === $state['phase'] && (int) $state['page'] > 50 ) {
+            $state['phase'] = 'backfill';
+        }
+
+        if ( 'backfill' === $state['phase'] && time() < $deadline ) {
+            $before    = count( $patterns );
+            $patterns  = $this->backfill_missing_categories( $patterns, $deadline );
+            if ( count( $patterns ) !== $before ) {
+                $this->store_library_cache( $scope, $patterns );
+            }
+            if ( time() < $deadline ) {
+                $state['phase'] = 'bulk';
+            }
+        }
+
+        if ( 'bulk' === $state['phase'] && time() < $deadline ) {
+            $bulk     = $this->fetch_bulk_patterns();
+            $patterns = $this->merge_pattern_libraries( $patterns, $bulk );
+            $this->store_library_cache( $scope, $patterns );
+            $state['phase']    = 'done';
+            $state['complete'] = count( $patterns ) >= 200;
+        } elseif ( 'bulk' === $state['phase'] && count( $patterns ) >= 200 ) {
+            $state['phase']    = 'done';
+            $state['complete'] = true;
+        }
+
+        $this->library_runtime[ $scope ] = $patterns;
+        $this->set_refresh_state( $state );
         delete_transient( $lock );
+
+        if ( empty( $state['complete'] ) ) {
+            $this->schedule_library_refresh( 2 );
+        }
 
         return is_array( $patterns ) ? $patterns : array();
     }
@@ -274,15 +628,20 @@ class PatternsWP_API_Section {
      * Fetch categories that did not appear in the unfiltered catalog.
      *
      * @param array $patterns Patterns already downloaded.
+     * @param int   $deadline Unix timestamp to stop, or 0 for no limit.
      * @return array
      */
-    private function backfill_missing_categories( array $patterns ) {
+    private function backfill_missing_categories( array $patterns, $deadline = 0 ) {
         $categories = $this->get_patternswp_category_type( false );
         if ( empty( $categories ) || ! is_array( $categories ) ) {
             return $patterns;
         }
 
         foreach ( $categories as $category ) {
+            if ( $deadline && time() >= $deadline ) {
+                return $patterns;
+            }
+
             $name = ( is_array( $category ) && isset( $category['name'] ) ) ? (string) $category['name'] : '';
             if ( '' === $name ) {
                 continue;
@@ -293,9 +652,9 @@ class PatternsWP_API_Section {
                 continue;
             }
 
-            $extra    = $this->fetch_all_paginated_patterns( $name );
+            $extra    = $this->fetch_all_paginated_patterns( $name, $deadline );
             $patterns = $this->merge_pattern_libraries( $patterns, $extra );
-            usleep( 400000 );
+            usleep( 150000 );
         }
 
         return $patterns;
@@ -308,13 +667,17 @@ class PatternsWP_API_Section {
      * so we page at 15–20 with a fresh token each time.
      *
      * @param string $category Optional category slug.
+     * @param int    $deadline Unix timestamp to stop, or 0 for no limit.
      * @return array
      */
-    private function fetch_all_paginated_patterns( $category = '' ) {
+    private function fetch_all_paginated_patterns( $category = '', $deadline = 0 ) {
         $per_page = 0;
         $first    = array();
 
         foreach ( array( 20, 15 ) as $size ) {
+            if ( $deadline && time() >= $deadline ) {
+                return array();
+            }
             $first = $this->fetch_paginated_page( 1, $size, $category );
             if ( ! empty( $first ) ) {
                 $per_page = $size;
@@ -331,6 +694,10 @@ class PatternsWP_API_Section {
         $empty_streak = 0;
 
         while ( $page <= 50 ) {
+            if ( $deadline && time() >= $deadline ) {
+                break;
+            }
+
             $batch = $this->fetch_paginated_page( $page, $per_page, $category );
             if ( empty( $batch ) ) {
                 $empty_streak++;
@@ -365,10 +732,10 @@ class PatternsWP_API_Section {
     private function fetch_paginated_page( $page, $per_page, $category = '' ) {
         $license = $this->get_license_data();
 
-        for ( $try = 0; $try < 4; $try++ ) {
+        for ( $try = 0; $try < 2; $try++ ) {
             $token = $this->get_api_token();
             if ( empty( $token ) ) {
-                usleep( 250000 );
+                usleep( 200000 );
                 continue;
             }
 
@@ -387,12 +754,12 @@ class PatternsWP_API_Section {
                 $this->api_url . 'wp-json/patternswps/v1/patterns'
             );
 
-            $batch = $this->normalize_patterns_list( $this->remote_get_json( $url, 60 ) );
+            $batch = $this->normalize_patterns_list( $this->remote_get_json( $url, 20 ) );
             if ( ! empty( $batch ) ) {
                 return $batch;
             }
 
-            usleep( 350000 );
+            usleep( 250000 );
         }
 
         return array();
@@ -422,7 +789,7 @@ class PatternsWP_API_Section {
                 $this->api_url . 'wp-json/patternswps_wp/v1/patterns_wp'
             );
 
-            $batch = $this->normalize_patterns_list( $this->remote_get_json( $url, 45 ) );
+            $batch = $this->normalize_patterns_list( $this->remote_get_json( $url, 25 ) );
             if ( ! empty( $batch ) ) {
                 return $batch;
             }
@@ -439,13 +806,19 @@ class PatternsWP_API_Section {
      * @return mixed
      */
     private function remote_get_json( $url, $timeout = 20 ) {
-        $response = wp_remote_get(
-            $url,
-            array(
-                'timeout' => $timeout,
-                'method'  => 'GET',
-            )
+        $args = array(
+            'timeout'    => $timeout,
+            'method'     => 'GET',
+            'sslverify'  => true,
+            'user-agent' => 'PatternsWP/' . PWP_P_VERSION . '; ' . home_url( '/' ),
         );
+
+        $response = wp_remote_get( $url, $args );
+
+        if ( is_wp_error( $response ) ) {
+            $args['sslverify'] = false;
+            $response          = wp_remote_get( $url, $args );
+        }
 
         if ( is_wp_error( $response ) ) {
             return null;
@@ -531,22 +904,31 @@ class PatternsWP_API_Section {
      * @return array
      */
     private function read_library_cache( $scope ) {
+        $file = $this->read_library_file( $scope );
+        if ( ! empty( $file ) ) {
+            return $file;
+        }
+
         $prefix      = $this->get_library_prefix( $scope );
         $chunk_count = (int) get_transient( $prefix . 'count' );
         $patterns    = array();
 
         if ( $chunk_count > 0 ) {
-            for ( $i = 0; $i < $chunk_count && $i < 50; $i++ ) {
+            for ( $i = 0; $i < $chunk_count && $i < 200; $i++ ) {
                 $chunk = get_transient( $prefix . $i );
                 if ( false === $chunk ) {
-                    return array();
+                    continue;
                 }
+                $chunk = $this->unpack_cache_payload( $chunk );
                 if ( is_array( $chunk ) ) {
                     $patterns = array_merge( $patterns, $chunk );
                 }
             }
 
-            return $this->normalize_patterns_list( $patterns );
+            $patterns = $this->normalize_patterns_list( $patterns );
+            if ( ! empty( $patterns ) ) {
+                return $patterns;
+            }
         }
 
         return $this->get_legacy_cached_patterns();
@@ -559,12 +941,20 @@ class PatternsWP_API_Section {
      */
     private function get_legacy_cached_patterns() {
         $cached_patterns = array();
+        $misses          = 0;
 
-        for ( $i = 0; $i < 50; $i++ ) {
+        for ( $i = 0; $i < 200; $i++ ) {
             $transient_data = get_transient( 'patterns_cache_' . $i );
             if ( false === $transient_data ) {
-                break;
+                $misses++;
+                if ( $misses >= 3 ) {
+                    break;
+                }
+                continue;
             }
+
+            $misses         = 0;
+            $transient_data = $this->unpack_cache_payload( $transient_data );
             if ( is_array( $transient_data ) ) {
                 $cached_patterns = array_merge( $cached_patterns, $transient_data );
             }
@@ -578,22 +968,23 @@ class PatternsWP_API_Section {
      * @param array  $patterns Pattern list.
      */
     private function store_library_cache( $scope, array $patterns ) {
+        $patterns   = $this->normalize_patterns_list( $patterns );
         $prefix     = $this->get_library_prefix( $scope );
-        $chunk_size = 10;
+        $chunk_size = 4;
         $chunks     = array_chunk( $patterns, $chunk_size );
 
+        $this->write_library_file( $scope, $patterns );
         $this->delete_library_cache( $scope );
 
         foreach ( $chunks as $index => $chunk ) {
-            set_transient( $prefix . $index, $chunk, DAY_IN_SECONDS );
+            set_transient( $prefix . $index, $this->pack_cache_payload( $chunk ), DAY_IN_SECONDS );
         }
 
         set_transient( $prefix . 'count', count( $chunks ), DAY_IN_SECONDS );
 
-        // Keep the legacy Gutenberg cache in sync for older readers.
         $this->delete_legacy_pattern_cache();
         foreach ( $chunks as $index => $chunk ) {
-            set_transient( 'patterns_cache_' . $index, $chunk, DAY_IN_SECONDS );
+            set_transient( 'patterns_cache_' . $index, $this->pack_cache_payload( $chunk ), DAY_IN_SECONDS );
         }
     }
 
@@ -604,7 +995,7 @@ class PatternsWP_API_Section {
         $prefix = $this->get_library_prefix( $scope );
         $count  = (int) get_transient( $prefix . 'count' );
 
-        for ( $i = 0; $i < max( $count, 80 ); $i++ ) {
+        for ( $i = 0; $i < max( $count, 200 ); $i++ ) {
             delete_transient( $prefix . $i );
         }
 
@@ -615,7 +1006,7 @@ class PatternsWP_API_Section {
      * Remove legacy bulk chunks.
      */
     private function delete_legacy_pattern_cache() {
-        for ( $i = 0; $i < 50; $i++ ) {
+        for ( $i = 0; $i < 200; $i++ ) {
             delete_transient( 'patterns_cache_' . $i );
         }
     }
@@ -629,7 +1020,7 @@ class PatternsWP_API_Section {
             return false;
         }
 
-        set_transient( $lock_key, 1, MINUTE_IN_SECONDS );
+        set_transient( $lock_key, 1, 5 * MINUTE_IN_SECONDS );
         return true;
     }
 
@@ -876,6 +1267,208 @@ class PatternsWP_API_Section {
                 )
             );
         }
+    }
+
+    /**
+     * @param mixed $data Cache payload.
+     * @return mixed
+     */
+    private function pack_cache_payload( $data ) {
+        if ( ! function_exists( 'gzcompress' ) ) {
+            return $data;
+        }
+
+        $json = wp_json_encode( $data );
+        if ( ! is_string( $json ) || '' === $json ) {
+            return $data;
+        }
+
+        return array(
+            '_pwp' => 1,
+            'z'    => base64_encode( gzcompress( $json, 6 ) ),
+        );
+    }
+
+    /**
+     * @param mixed $payload Stored cache payload.
+     * @return array
+     */
+    private function unpack_cache_payload( $payload ) {
+        if ( is_array( $payload ) && ! empty( $payload['_pwp'] ) && ! empty( $payload['z'] ) && is_string( $payload['z'] ) ) {
+            if ( ! function_exists( 'gzuncompress' ) ) {
+                return array();
+            }
+            $raw = base64_decode( $payload['z'], true );
+            if ( false === $raw ) {
+                return array();
+            }
+            $json = @gzuncompress( $raw );
+            $data = is_string( $json ) ? json_decode( $json, true ) : null;
+            return is_array( $data ) ? $data : array();
+        }
+
+        return is_array( $payload ) ? $payload : array();
+    }
+
+    /**
+     * @param string $scope License scope.
+     * @return string
+     */
+    private function get_library_file_path( $scope ) {
+        $uploads = wp_upload_dir();
+        if ( ! empty( $uploads['error'] ) ) {
+            return '';
+        }
+
+        $dir = trailingslashit( $uploads['basedir'] ) . 'patternswp';
+        return $dir . '/library-' . sanitize_key( $scope ) . '.json.gz';
+    }
+
+    /**
+     * @param string $scope    License scope.
+     * @param array  $patterns Pattern list.
+     */
+    private function write_library_file( $scope, array $patterns ) {
+        $path = $this->get_library_file_path( $scope );
+        if ( '' === $path ) {
+            return;
+        }
+
+        $dir = dirname( $path );
+        if ( ! is_dir( $dir ) ) {
+            wp_mkdir_p( $dir );
+        }
+
+        if ( is_dir( $dir ) && ! file_exists( $dir . '/index.php' ) ) {
+            file_put_contents( $dir . '/index.php', "<?php\n// Silence is golden.\n" );
+        }
+
+        $json = wp_json_encode( array_values( $patterns ) );
+        if ( ! is_string( $json ) ) {
+            return;
+        }
+
+        if ( function_exists( 'gzencode' ) ) {
+            file_put_contents( $path, gzencode( $json, 6 ) );
+            return;
+        }
+
+        file_put_contents( $path, $json );
+    }
+
+    /**
+     * @param string $scope License scope.
+     * @return array
+     */
+    private function read_library_file( $scope ) {
+        $path = $this->get_library_file_path( $scope );
+        if ( '' === $path || ! is_readable( $path ) ) {
+            return array();
+        }
+
+        $raw = file_get_contents( $path );
+        if ( ! is_string( $raw ) || '' === $raw ) {
+            return array();
+        }
+
+        if ( function_exists( 'gzdecode' ) ) {
+            $decoded = @gzdecode( $raw );
+            if ( is_string( $decoded ) && '' !== $decoded ) {
+                $raw = $decoded;
+            }
+        }
+
+        $data = json_decode( $raw, true );
+        return $this->normalize_patterns_list( $data );
+    }
+
+    /**
+     * @param string $scope License scope.
+     */
+    private function delete_library_file( $scope ) {
+        $path = $this->get_library_file_path( $scope );
+        if ( '' !== $path && file_exists( $path ) ) {
+            wp_delete_file( $path );
+        }
+    }
+
+    /**
+     * @return array
+     */
+    private function default_refresh_state() {
+        return array(
+            'phase'        => 'paginated',
+            'page'         => 1,
+            'per_page'     => 0,
+            'empty_streak' => 0,
+            'complete'     => false,
+        );
+    }
+
+    /**
+     * @return array
+     */
+    private function get_refresh_state() {
+        $state = get_option( 'patternswp_lib_state', array() );
+        if ( ! is_array( $state ) ) {
+            $state = array();
+        }
+
+        return array_merge( $this->default_refresh_state(), $state );
+    }
+
+    /**
+     * @param array $state Refresh progress.
+     */
+    private function set_refresh_state( array $state ) {
+        update_option( 'patternswp_lib_state', $state, false );
+    }
+
+    /**
+     * @return bool
+     */
+    private function is_library_complete() {
+        $state = $this->get_refresh_state();
+        if ( empty( $state['complete'] ) ) {
+            return false;
+        }
+
+        $cached = $this->read_library_cache( $this->get_library_scope() );
+        return count( $cached ) >= 200;
+    }
+
+    /**
+     * Sidebar categories when the remote taxonomy request is blocked or slow.
+     *
+     * @return array
+     */
+    private function get_fallback_categories() {
+        $names = array(
+            'patternswp-blog',
+            'patternswp-contact',
+            'patternswp-cta',
+            'patternswp-customer',
+            'patternswp-faq',
+            'patternswp-features',
+            'patternswp-footer',
+            'patternswp-gallery',
+            'patternswp-header',
+            'patternswp-hero',
+            'patternswp-link-in-bio',
+            'patternswp-page-templates',
+            'patternswp-pricing',
+            'patternswp-statistics',
+            'patternswp-team',
+            'patternswp-testimonials',
+            'patternswp-utility',
+        );
+
+        $categories = array();
+        foreach ( $names as $name ) {
+            $categories[] = array( 'name' => $name );
+        }
+
+        return $categories;
     }
 
     /**

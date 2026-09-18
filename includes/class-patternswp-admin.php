@@ -253,32 +253,42 @@ class PatternsWP_Admin {
 
         check_ajax_referer( 'patternswp_admin_nonce', 'nonce' );
 
-        delete_transient( 'patternswp_category_type' );
+        try {
+            delete_transient( 'patternswp_category_type' );
 
-        $pattern = '_transient_patternswp_';
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $results = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM $wpdb->options WHERE option_name LIKE %s", $wpdb->esc_like( $pattern ) . '%' ) );
+            $pattern = '_transient_patternswp_';
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $results = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM $wpdb->options WHERE option_name LIKE %s", $wpdb->esc_like( $pattern ) . '%' ) );
 
-        $patterns = 'patterns_cache_';
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-        $wpdb->query(
-            $wpdb->prepare(
-                "DELETE FROM $wpdb->options WHERE option_name LIKE %s",
-                $wpdb->esc_like( $patterns ) . '%'
-            )
-        );
+            $patterns = 'patterns_cache_';
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM $wpdb->options WHERE option_name LIKE %s",
+                    $wpdb->esc_like( $patterns ) . '%'
+                )
+            );
 
-        foreach ( $results as $transient ) {
-            delete_option( $transient );
-            delete_option( str_replace( '_transient_', '_transient_timeout_', $transient ) );
+            foreach ( $results as $transient ) {
+                delete_option( $transient );
+                delete_option( str_replace( '_transient_', '_transient_timeout_', $transient ) );
+            }
+
+            $this->clear_pattern_cache( false, false );
+            $api = PatternsWP_API_Section::get_instance();
+            $api->purge_library_caches();
+            $api->schedule_library_refresh( 1 );
+        } catch ( \Throwable $e ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Could not clear the cache. Please try again.', 'patternswp' ),
+                )
+            );
         }
-
-        $this->clear_pattern_cache( false, false );
-        $this->patternswp_load_patterns_by_remote_ajax();
 
         wp_send_json_success(
             array(
-                'message' => __( 'Cache cleared successfully.', 'patternswp' ),
+                'message' => __( 'Cache cleared. Patterns will reload in the background.', 'patternswp' ),
             )
         );
     }
@@ -460,7 +470,9 @@ class PatternsWP_Admin {
             }
 
             // Load patterns in background
-            $this->patternswp_load_patterns_by_remote_ajax();
+            $api = PatternsWP_API_Section::get_instance();
+            $api->purge_library_caches();
+            $api->schedule_library_refresh( 1 );
             
             // Set a transient for the success message
             set_transient('patternswp_cache_cleared', 'Cache cleared successfully', 5);
@@ -481,6 +493,8 @@ class PatternsWP_Admin {
         if ( ! wp_next_scheduled( 'patternswp_daily_transient_load' ) ) {
             wp_schedule_event( time(), 'daily', 'patternswp_daily_transient_load' );
         }
+
+        PatternsWP_API_Section::get_instance()->maybe_schedule_warm();
     }
 
     /**
@@ -509,6 +523,7 @@ class PatternsWP_Admin {
      */
     public function patternswp_on_activation() {
         set_transient('patternswp_activation_redirect', true, 30);
+        PatternsWP_API_Section::get_instance()->schedule_library_refresh( 3 );
     }
     
     /**

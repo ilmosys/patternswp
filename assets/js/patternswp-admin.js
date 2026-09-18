@@ -120,7 +120,23 @@
 				body: form,
 			} )
 			.then( function ( response ) {
-				return response.json();
+				return response.text().then( function ( text ) {
+					var json = null;
+					try {
+						json = text ? JSON.parse( text ) : null;
+					} catch ( e ) {
+						json = null;
+					}
+					if ( ! json ) {
+						throw new Error(
+							__(
+								'The server did not return a valid response. Please try again.',
+								'patternswp'
+							)
+						);
+					}
+					return json;
+				} );
 			} )
 			.then( function ( json ) {
 				if ( ! json || ! json.success ) {

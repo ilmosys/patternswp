@@ -25,6 +25,21 @@
 	border-bottom: 1px solid #e0e0e0;
 }
 
+.patternswp-library-sync {
+	margin-right: 4px;
+	min-width: auto;
+}
+
+.patternswp-library-sync.is-busy {
+	pointer-events: none;
+}
+
+.patternswp-library-sync .components-spinner {
+	width: 16px;
+	height: 16px;
+	margin: 0 6px 0 0;
+}
+
 .patternswp-layout {
 	display: flex;
 	flex-direction: row;
