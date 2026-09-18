@@ -133,8 +133,7 @@ class PatternsWP_Admin {
 
         $license_option = get_option( 'patternswp_license_key', array() );
         $license_key    = isset( $license_option['patternswp_pro_license_key'] ) ? $license_option['patternswp_pro_license_key'] : '';
-        $license_data   = get_option( 'patternswp_plugin_license_data', array() );
-        $is_active      = ! empty( $license_data['activated'] );
+        $is_active      = PatternsWP_API_Section::get_instance()->is_license_active();
 
         if ( ! empty( $license_key ) && strlen( $license_key ) > 8 ) {
             $masked_key = substr( $license_key, 0, 8 ) . str_repeat( 'X', strlen( $license_key ) - 8 );

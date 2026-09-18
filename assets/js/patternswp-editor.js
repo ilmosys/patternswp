@@ -334,6 +334,17 @@
 		return boot.ajaxUrl || window.ajaxurl || '';
 	}
 
+	function isLicenseUnlocked() {
+		return !! getBoot().isLicenseActive;
+	}
+
+	function isPatternLocked( pattern ) {
+		if ( ! pattern || isLicenseUnlocked() ) {
+			return false;
+		}
+		return pattern.locked === true || pattern.type === 'pro';
+	}
+
 	function parseAjaxJson( response ) {
 		return response.text().then( function ( text ) {
 			var json = null;
@@ -363,11 +374,16 @@
 			};
 		}
 		if ( data && Array.isArray( data.patterns ) ) {
+			if ( typeof data.licenseActive === 'boolean' ) {
+				window.patternsWpData = window.patternsWpData || {};
+				window.patternsWpData.isLicenseActive = data.licenseActive;
+			}
 			return {
 				patterns: data.patterns,
 				total: typeof data.total === 'number' ? data.total : data.patterns.length,
 				complete: !! data.complete,
 				categories: Array.isArray( data.categories ) ? data.categories : null,
+				licenseActive: data.licenseActive === true,
 			};
 		}
 		throw new Error( 'invalid' );
@@ -616,8 +632,14 @@
 				var list = Array.isArray( patternOrList ) ? patternOrList : [ patternOrList ];
 				var blocks = [];
 				list.forEach( function ( pattern ) {
+					if ( isPatternLocked( pattern ) ) {
+						return;
+					}
 					try {
 						var markup = decodePatternContent( pattern.content );
+						if ( ! markup ) {
+							return;
+						}
 						parse( markup ).forEach( function ( block ) {
 							blocks.push( cloneBlock( block ) );
 						} );
@@ -627,10 +649,16 @@
 				} );
 
 				if ( ! blocks.length ) {
+					var blocked = list.some( isPatternLocked );
 					notices.createErrorNotice(
-						__( 'Could not insert this pattern.', 'patternswp' ),
+						blocked
+							? __( 'Activate your PatternsWP license to insert Pro patterns.', 'patternswp' )
+							: __( 'Could not insert this pattern.', 'patternswp' ),
 						{ type: 'snackbar' }
 					);
+					if ( blocked ) {
+						window.open( 'https://thepatternswp.com/pricing/', '_blank', 'noopener,noreferrer' );
+					}
 					return;
 				}
 
@@ -1183,8 +1211,8 @@
 	function PatternCard( props ) {
 		var pattern = props.pattern;
 		var isLicenseActive = props.isLicenseActive;
-		var isPro = pattern.type === 'pro';
-		var locked = isPro && ! isLicenseActive;
+		var isPro = pattern.type === 'pro' || pattern.locked === true;
+		var locked = isPatternLocked( pattern );
 		var isFavorite = props.isFavorite;
 		var isSelected = props.isSelected;
 		var bulkMode = props.bulkMode;
@@ -1211,7 +1239,7 @@
 				return;
 			}
 			if ( locked ) {
-				window.open( 'https://thepatternswp.com/pricing/', '_blank', 'noopener,noreferrer' );
+				props.onView( pattern );
 				return;
 			}
 			props.onInsert( pattern );
@@ -1374,8 +1402,8 @@
 	function PatternDetailView( props ) {
 		var pattern = props.pattern;
 		var isLicenseActive = props.isLicenseActive;
-		var isPro = pattern.type === 'pro';
-		var locked = isPro && ! isLicenseActive;
+		var isPro = pattern.type === 'pro' || pattern.locked === true;
+		var locked = isPatternLocked( pattern );
 		var isFavorite = props.isFavorite;
 		var viewportWidth = props.viewportWidth;
 
@@ -2062,7 +2090,7 @@
 		var insertSelected = useCallback(
 			function () {
 				var allowed = selectedList.filter( function ( pattern ) {
-					return !( pattern.type === 'pro' && ! isLicenseActive );
+					return ! isPatternLocked( pattern );
 				} );
 				if ( ! allowed.length ) {
 					return;
@@ -2648,8 +2676,7 @@
 		}
 
 		function onPick( pattern ) {
-			var locked = pattern.type === 'pro' && ! isLicenseActive;
-			if ( locked ) {
+			if ( isPatternLocked( pattern ) ) {
 				window.open( 'https://thepatternswp.com/pricing/', '_blank', 'noopener,noreferrer' );
 				return;
 			}
@@ -2716,7 +2743,7 @@
 								  )
 								: null,
 							results.map( function ( pattern ) {
-								var locked = pattern.type === 'pro' && ! isLicenseActive;
+								var locked = isPatternLocked( pattern );
 								return el(
 									'button',
 									{
@@ -2735,7 +2762,7 @@
 										{ className: 'patternswp-library-block__result-title' },
 										pattern.title || __( 'Untitled pattern', 'patternswp' )
 									),
-									pattern.type === 'pro'
+									pattern.type === 'pro' || pattern.locked
 										? el(
 												'span',
 												{ className: 'patternswp-library-block__result-badge' },

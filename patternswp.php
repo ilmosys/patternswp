@@ -36,8 +36,7 @@ require_once PWP_PLUGIN_DIR . 'includes/lib/class-patterns-license.php';
  * Enqueue assets for Block Editor.
  */
 function patternswp_enqueue_editor_assets() {
-    $get_license_data = get_option('patternswp_plugin_license_data');
-    $is_active = isset($get_license_data['activated']) ? $get_license_data['activated'] : false;
+    $patternswp_api_section = PatternsWP_API_Section::get_instance();
 
     $script_path = 'assets/js/patternswp-editor.js';
     $script_deps =     array(
@@ -65,9 +64,8 @@ function patternswp_enqueue_editor_assets() {
         true
     );
 
-    $patternswp_api_section = PatternsWP_API_Section::get_instance();
     $localize_data = array(
-        'isLicenseActive'   => (bool) $is_active,
+        'isLicenseActive'   => $patternswp_api_section->is_license_active(),
         'externalPatterns'  => array(),
         'patternCategories' => $patternswp_api_section->get_patternswp_category_type(),
         'patternsNonce'     => wp_create_nonce( 'patternswp_nonce' ),
@@ -299,8 +297,7 @@ add_action('admin_init', 'patternswp_maybe_upgrade_library', 5);
  */
 function patternswp_plugin_action_links($links, $file) {
     if ($file === plugin_basename(__FILE__)) {
-        $get_license_data = get_option('patternswp_plugin_license_data');
-        $is_active = isset($get_license_data['activated']) ? $get_license_data['activated'] : false;
+        $is_active = PatternsWP_API_Section::get_instance()->is_license_active();
 
         $support_link = '<a href="https://thepatternswp.com/contact/" target="_blank">Support</a>';
         array_unshift($links, $support_link);

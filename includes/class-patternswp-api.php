@@ -184,7 +184,6 @@ class PatternsWP_API_Section {
      */
     public function get_license_data() {
         $license_key      = '';
-        $licensestatus    = false;
         $get_license_data = get_option( 'patternswp_plugin_license_data' );
         $stored_option    = get_option( 'patternswp_license_key', array() );
 
@@ -194,25 +193,49 @@ class PatternsWP_API_Section {
             $license_key = $stored_option;
         }
 
-        if ( is_array( $get_license_data ) && ! empty( $get_license_data['activated'] ) ) {
-            $licensestatus = true;
-
-            if ( '' === $license_key && ! empty( $get_license_data['license_key'] ) ) {
-                $stored = $get_license_data['license_key'];
-                if ( is_object( $stored ) && isset( $stored->key ) ) {
-                    $license_key = (string) $stored->key;
-                } elseif ( is_array( $stored ) && isset( $stored['key'] ) ) {
-                    $license_key = (string) $stored['key'];
-                } elseif ( is_string( $stored ) ) {
-                    $license_key = $stored;
-                }
+        if ( is_array( $get_license_data ) && ! empty( $get_license_data['license_key'] ) && '' === $license_key ) {
+            $stored = $get_license_data['license_key'];
+            if ( is_object( $stored ) && isset( $stored->key ) ) {
+                $license_key = (string) $stored->key;
+            } elseif ( is_array( $stored ) && isset( $stored['key'] ) ) {
+                $license_key = (string) $stored['key'];
+            } elseif ( is_string( $stored ) ) {
+                $license_key = $stored;
             }
         }
 
+        $activated = is_array( $get_license_data ) && isset( $get_license_data['activated'] )
+            ? $get_license_data['activated']
+            : false;
+
         return array(
             'license_key'   => $license_key,
-            'licensestatus' => $licensestatus,
+            'licensestatus' => $this->is_activated_flag( $activated ) && '' !== trim( $license_key ),
         );
+    }
+
+    /**
+     * Whether Pro is unlocked for this site.
+     *
+     * Requires a stored license key AND a verified activation flag.
+     *
+     * @return bool
+     */
+    public function is_license_active() {
+        $license = $this->get_license_data();
+        return ! empty( $license['licensestatus'] );
+    }
+
+    /**
+     * @param mixed $value Raw `activated` flag from license storage.
+     * @return bool
+     */
+    private function is_activated_flag( $value ) {
+        if ( true === $value || 1 === $value || '1' === $value ) {
+            return true;
+        }
+
+        return is_string( $value ) && 'true' === strtolower( $value );
     }
 
     /**
@@ -326,12 +349,21 @@ class PatternsWP_API_Section {
 
         $before = count( $this->get_library( false ) );
         $batch  = $this->fetch_paginated_page( 1, 20, '' );
+        $pro    = $this->fetch_paginated_page( 1, 20, '', 'pro' );
         update_option( 'patternswp_lib_checked_at', time(), false );
 
         $has_updates = false;
+        $scope       = $this->get_library_scope();
+        $merged      = $this->get_library( false );
+
         if ( ! empty( $batch ) ) {
-            $scope  = $this->get_library_scope();
-            $merged = $this->merge_pattern_libraries( $batch, $this->get_library( false ) );
+            $merged = $this->merge_pattern_libraries( $batch, $merged );
+        }
+        if ( ! empty( $pro ) ) {
+            $merged = $this->merge_pattern_libraries( $pro, $merged );
+        }
+
+        if ( ! empty( $batch ) || ! empty( $pro ) ) {
             $this->store_library_cache( $scope, $merged );
             $this->library_runtime[ $scope ] = $merged;
 
@@ -361,6 +393,7 @@ class PatternsWP_API_Section {
      * @return array
      */
     public function warm_library_for_request() {
+        $this->maybe_classify_pro_patterns();
         $this->refresh_library( false, 8 );
         $this->get_patternswp_category_type( false );
         return $this->get_library_status();
@@ -376,6 +409,8 @@ class PatternsWP_API_Section {
      * @return array
      */
     public function query_library_page( $page = 1, $p_per_page = 15, $search = '', $category = '' ) {
+        $this->maybe_classify_pro_patterns();
+
         $items = $this->get_patternswp_pattern( $page, $p_per_page, $search, $category );
 
         $all      = $this->get_library( false );
@@ -385,10 +420,11 @@ class PatternsWP_API_Section {
         $filtered = $this->normalize_patterns_list( $filtered );
 
         return array(
-            'patterns'   => is_array( $items ) ? array_values( $items ) : array(),
-            'total'      => count( $filtered ),
-            'complete'   => $this->is_library_complete(),
-            'categories' => $this->get_cached_categories(),
+            'patterns'      => $this->prepare_patterns_for_client( is_array( $items ) ? $items : array() ),
+            'total'         => count( $filtered ),
+            'complete'      => $this->is_library_complete(),
+            'categories'    => $this->get_cached_categories(),
+            'licenseActive' => $this->is_license_active(),
         );
     }
 
@@ -407,6 +443,184 @@ class PatternsWP_API_Section {
     }
 
     /**
+     * Mark Pro patterns as locked for unlicensed sites.
+     * Markup stays in the payload so free users can see the design and convert.
+     *
+     * @param array $patterns Pattern list.
+     * @return array
+     */
+    private function prepare_patterns_for_client( array $patterns ) {
+        $licensed = $this->is_license_active();
+        $prepared = array();
+
+        foreach ( $patterns as $pattern ) {
+            if ( ! is_array( $pattern ) ) {
+                continue;
+            }
+
+            $is_pro            = $this->is_pro_pattern( $pattern );
+            $pattern['type']   = $is_pro ? 'pro' : 'free';
+            $pattern['locked'] = ( $is_pro && ! $licensed );
+            $prepared[]        = $pattern;
+        }
+
+        return array_values( $prepared );
+    }
+
+    /**
+     * Stamp Pro types onto a cache that was stored as all-free.
+     */
+    private function maybe_classify_pro_patterns() {
+        if ( $this->library_has_pro_patterns() ) {
+            return;
+        }
+
+        if ( get_transient( 'patternswp_pro_classify_empty' ) ) {
+            return;
+        }
+
+        if ( get_transient( 'patternswp_pro_classify_lock' ) ) {
+            return;
+        }
+
+        set_transient( 'patternswp_pro_classify_lock', 1, MINUTE_IN_SECONDS );
+        $this->classify_pro_patterns( 6 );
+    }
+
+    /**
+     * @return bool
+     */
+    private function library_has_pro_patterns() {
+        foreach ( $this->get_library( false ) as $pattern ) {
+            if ( $this->is_pro_pattern( $pattern ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Download the Pro catalog stream and mark matching local patterns as Pro.
+     *
+     * @param int $budget Seconds to spend.
+     */
+    private function classify_pro_patterns( $budget = 6 ) {
+        $deadline = time() + max( 1, (int) $budget );
+        $scope    = $this->get_library_scope();
+        $patterns = $this->get_library( false );
+        $page     = 1;
+        $found    = 0;
+
+        $pro_first  = $this->fetch_paginated_page( 1, 20, '', 'pro' );
+        $free_first = $this->fetch_paginated_page( 1, 20, '', 'free' );
+        if ( empty( $pro_first ) ) {
+            set_transient( 'patternswp_pro_classify_empty', 1, 6 * HOUR_IN_SECONDS );
+            return;
+        }
+
+        if ( ! empty( $free_first ) && $this->pattern_key_set( $pro_first ) === $this->pattern_key_set( $free_first ) ) {
+            set_transient( 'patternswp_pro_classify_empty', 1, 6 * HOUR_IN_SECONDS );
+            return;
+        }
+
+        $found   += count( $pro_first );
+        $patterns = $this->merge_pattern_libraries( $pro_first, $patterns );
+        $page     = 2;
+
+        while ( time() < $deadline && $page <= 50 ) {
+            $batch = $this->fetch_paginated_page( $page, 20, '', 'pro' );
+            if ( empty( $batch ) ) {
+                break;
+            }
+
+            $found   += count( $batch );
+            $patterns = $this->merge_pattern_libraries( $batch, $patterns );
+
+            if ( count( $batch ) < 20 ) {
+                break;
+            }
+
+            $page++;
+        }
+
+        if ( $found > 0 ) {
+            $this->store_library_cache( $scope, $patterns );
+            $this->library_runtime[ $scope ] = $patterns;
+            delete_transient( 'patternswp_pro_classify_empty' );
+        } else {
+            set_transient( 'patternswp_pro_classify_empty', 1, 6 * HOUR_IN_SECONDS );
+        }
+    }
+
+    /**
+     * @param array $patterns Pattern list.
+     * @return string
+     */
+    private function pattern_key_set( array $patterns ) {
+        $keys = array();
+        foreach ( $patterns as $pattern ) {
+            if ( ! is_array( $pattern ) ) {
+                continue;
+            }
+            $key = $this->get_pattern_library_key( $pattern );
+            if ( '' !== $key ) {
+                $keys[] = $key;
+            }
+        }
+        sort( $keys );
+        return implode( '|', $keys );
+    }
+
+    /**
+     * @param array $pattern Pattern payload.
+     * @return bool
+     */
+    private function is_pro_pattern( array $pattern ) {
+        return 'pro' === $this->resolve_pattern_type( $pattern );
+    }
+
+    /**
+     * @param array $pattern Pattern payload.
+     * @return string `pro` or `free`.
+     */
+    private function resolve_pattern_type( array $pattern ) {
+        foreach ( array( 'is_pro', 'isPro', 'pro', 'premium', 'is_premium' ) as $flag ) {
+            if ( ! array_key_exists( $flag, $pattern ) ) {
+                continue;
+            }
+            $value = $pattern[ $flag ];
+            if ( true === $value || 1 === $value || '1' === $value ) {
+                return 'pro';
+            }
+            if ( is_string( $value ) && in_array( strtolower( $value ), array( 'pro', 'premium', 'paid', 'true' ), true ) ) {
+                return 'pro';
+            }
+        }
+
+        foreach ( array( 'type', 'Type', 'pattern_type', 'patternType', 'plan', 'tier' ) as $key ) {
+            if ( ! isset( $pattern[ $key ] ) ) {
+                continue;
+            }
+
+            $raw = $pattern[ $key ];
+            if ( true === $raw || 1 === $raw ) {
+                return 'pro';
+            }
+
+            $value = strtolower( trim( (string) $raw ) );
+            if ( in_array( $value, array( 'pro', 'premium', 'paid', 'paid-pro', '1', 'true' ), true ) ) {
+                return 'pro';
+            }
+            if ( in_array( $value, array( 'free', '0', 'false' ), true ) ) {
+                return 'free';
+            }
+        }
+
+        return 'free';
+    }
+
+    /**
      * Return the full library for the current license, from cache when possible.
      *
      * @param bool $refresh_if_empty Fetch remotely when the cache is cold.
@@ -420,6 +634,10 @@ class PatternsWP_API_Section {
         }
 
         $cached = $this->read_library_cache( $scope );
+        if ( empty( $cached ) ) {
+            $other  = ( 'pro' === $scope ) ? 'free' : 'pro';
+            $cached = $this->read_library_cache( $other );
+        }
         if ( ! empty( $cached ) ) {
             $this->library_runtime[ $scope ] = $cached;
             return $cached;
@@ -589,11 +807,18 @@ class PatternsWP_API_Section {
             $bulk     = $this->fetch_bulk_patterns();
             $patterns = $this->merge_pattern_libraries( $patterns, $bulk );
             $this->store_library_cache( $scope, $patterns );
+            $state['phase'] = 'classify';
+        } elseif ( 'bulk' === $state['phase'] && count( $patterns ) >= 200 ) {
+            $state['phase'] = 'classify';
+        }
+
+        if ( 'classify' === $state['phase'] && time() < $deadline ) {
+            $remaining = max( 1, $deadline - time() );
+            $this->library_runtime[ $scope ] = $patterns;
+            $this->classify_pro_patterns( $remaining );
+            $patterns = $this->get_library( false );
             $state['phase']    = 'done';
             $state['complete'] = count( $patterns ) >= 200;
-        } elseif ( 'bulk' === $state['phase'] && count( $patterns ) >= 200 ) {
-            $state['phase']    = 'done';
-            $state['complete'] = true;
         }
 
         $this->library_runtime[ $scope ] = $patterns;
@@ -729,7 +954,7 @@ class PatternsWP_API_Section {
      * @param string $category Optional category slug.
      * @return array
      */
-    private function fetch_paginated_page( $page, $per_page, $category = '' ) {
+    private function fetch_paginated_page( $page, $per_page, $category = '', $type = '' ) {
         $license = $this->get_license_data();
 
         for ( $try = 0; $try < 2; $try++ ) {
@@ -739,23 +964,34 @@ class PatternsWP_API_Section {
                 continue;
             }
 
+            $query = array(
+                'page'            => $page,
+                'patternsPerPage' => $per_page,
+                'search'          => '',
+                'category'        => $category,
+                'site_url'        => get_site_url(),
+                'license_key'     => ! empty( $license['licensestatus'] ) ? $license['license_key'] : '',
+                'licensestatus'   => ! empty( $license['licensestatus'] ) ? '1' : '',
+                'api_token'       => $token,
+                'plugin_version'  => PWP_P_VERSION,
+            );
+            if ( '' !== $type ) {
+                $query['type'] = $type;
+            }
+
             $url = add_query_arg(
-                array(
-                    'page'            => $page,
-                    'patternsPerPage' => $per_page,
-                    'search'          => '',
-                    'category'        => $category,
-                    'site_url'        => get_site_url(),
-                    'license_key'     => ! empty( $license['licensestatus'] ) ? $license['license_key'] : '',
-                    'licensestatus'   => ! empty( $license['licensestatus'] ) ? '1' : '',
-                    'api_token'       => $token,
-                    'plugin_version'  => PWP_P_VERSION,
-                ),
+                $query,
                 $this->api_url . 'wp-json/patternswps/v1/patterns'
             );
 
             $batch = $this->normalize_patterns_list( $this->remote_get_json( $url, 20 ) );
             if ( ! empty( $batch ) ) {
+                if ( 'pro' === $type ) {
+                    foreach ( $batch as &$pattern ) {
+                        $pattern['type'] = 'pro';
+                    }
+                    unset( $pattern );
+                }
                 return $batch;
             }
 
@@ -843,33 +1079,35 @@ class PatternsWP_API_Section {
     private function merge_pattern_libraries( array $typed_patterns, array $bulk_patterns ) {
         $merged = array();
 
-        foreach ( $typed_patterns as $pattern ) {
+        $add = function ( $pattern ) use ( &$merged ) {
             if ( ! is_array( $pattern ) ) {
-                continue;
+                return;
             }
             $key = $this->get_pattern_library_key( $pattern );
             if ( '' === $key ) {
-                continue;
+                return;
             }
-            $merged[ $key ] = $pattern;
-        }
 
-        foreach ( $bulk_patterns as $pattern ) {
-            if ( ! is_array( $pattern ) ) {
-                continue;
-            }
-            $key = $this->get_pattern_library_key( $pattern );
-            if ( '' === $key ) {
-                continue;
-            }
+            $incoming_type = $this->resolve_pattern_type( $pattern );
             if ( isset( $merged[ $key ] ) ) {
+                if ( 'pro' === $incoming_type ) {
+                    $merged[ $key ]['type'] = 'pro';
+                }
                 if ( empty( $merged[ $key ]['categories'] ) && ! empty( $pattern['categories'] ) ) {
                     $merged[ $key ]['categories'] = $pattern['categories'];
                 }
-                continue;
+                return;
             }
-            $pattern['type'] = 'free';
+
+            $pattern['type'] = $incoming_type;
             $merged[ $key ]  = $pattern;
+        };
+
+        foreach ( $typed_patterns as $pattern ) {
+            $add( $pattern );
+        }
+        foreach ( $bulk_patterns as $pattern ) {
+            $add( $pattern );
         }
 
         return array_values( $merged );
@@ -1084,10 +1322,7 @@ class PatternsWP_API_Section {
                 $categories = array();
             }
 
-            $type = isset( $pattern['type'] ) ? strtolower( (string) $pattern['type'] ) : 'free';
-            if ( ! in_array( $type, array( 'free', 'pro' ), true ) ) {
-                $type = 'free';
-            }
+            $type = $this->resolve_pattern_type( $pattern );
 
             $pattern['title']      = $title;
             $pattern['content']    = $content;
@@ -1210,7 +1445,7 @@ class PatternsWP_API_Section {
             return;
         }
 
-        $licensed              = ! empty( $this->get_license_data()['licensestatus'] );
+        $licensed              = $this->is_license_active();
         $registered_categories = array();
         $registry              = \WP_Block_Patterns_Registry::get_instance();
 
@@ -1219,7 +1454,7 @@ class PatternsWP_API_Section {
                 continue;
             }
 
-            if ( ! $licensed && isset( $pattern['type'] ) && 'pro' === $pattern['type'] ) {
+            if ( ! $licensed && $this->is_pro_pattern( $pattern ) ) {
                 continue;
             }
 
